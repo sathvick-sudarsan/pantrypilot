@@ -1,6 +1,13 @@
-from collections.abc import Collection
+from collections.abc import Collection, Iterable, Sequence
 
-from pantrypilot.models import Recipe, ScoreBreakdown, ScoreComponent
+from pantrypilot.models import (
+    RankedRecipe,
+    RankingRequest,
+    Recipe,
+    ScoreBreakdown,
+    ScoreComponent,
+)
+from pantrypilot.normalization import normalize_ingredients
 
 PANTRY_WEIGHT = 0.70
 PROTEIN_WEIGHT = 0.20
@@ -87,3 +94,61 @@ def render_explanation(
         f"{recipe.prep_minutes} minutes is within the {max_prep_minutes}-minute "
         f"limit (fit {score_breakdown.time_fit.value:.4f})."
     )
+
+
+def rank_recipes(
+    request: RankingRequest,
+    recipes: Sequence[Recipe],
+) -> list[RankedRecipe]:
+    pantry_items = set(normalize_ingredients(request.pantry_items))
+    excluded_ingredients = set(normalize_ingredients(request.excluded_ingredients))
+    ranked_recipes = []
+
+    for recipe in recipes:
+        if not is_eligible(recipe, excluded_ingredients, request.max_prep_minutes):
+            continue
+        matched_ingredients, missing_ingredients = match_ingredients(
+            recipe, pantry_items
+        )
+        final_score, score_breakdown = calculate_score(
+            recipe,
+            len(matched_ingredients),
+            request.min_protein_g,
+            request.max_prep_minutes,
+        )
+        ranked_recipes.append(
+            RankedRecipe(
+                id=recipe.id,
+                name=recipe.name,
+                required_ingredients=recipe.required_ingredients,
+                calories=recipe.calories,
+                protein_g=recipe.protein_g,
+                prep_minutes=recipe.prep_minutes,
+                final_score=final_score,
+                matched_ingredients=matched_ingredients,
+                missing_ingredients=missing_ingredients,
+                score_breakdown=score_breakdown,
+                explanation=render_explanation(
+                    recipe,
+                    len(matched_ingredients),
+                    request.min_protein_g,
+                    request.max_prep_minutes,
+                    score_breakdown,
+                ),
+            )
+        )
+
+    return limit_ranked_recipes(
+        sort_ranked_recipes(ranked_recipes),
+        request.limit,
+    )
+
+
+def sort_ranked_recipes(recipes: Iterable[RankedRecipe]) -> list[RankedRecipe]:
+    return sorted(recipes, key=lambda recipe: (-recipe.final_score, recipe.id))
+
+
+def limit_ranked_recipes(
+    recipes: Sequence[RankedRecipe], limit: int
+) -> list[RankedRecipe]:
+    return list(recipes[:limit])

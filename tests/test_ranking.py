@@ -2,11 +2,12 @@ from decimal import Decimal
 
 import pytest
 
-from pantrypilot.models import Recipe
+from pantrypilot.models import RankingRequest, Recipe
 from pantrypilot.ranking import (
     calculate_score,
     is_eligible,
     match_ingredients,
+    rank_recipes,
     render_explanation,
 )
 
@@ -25,6 +26,25 @@ def make_recipe(
         calories=300,
         protein_g=protein_g,
         prep_minutes=prep_minutes,
+    )
+
+
+def make_request(
+    *,
+    pantry_items: list[str] | None = None,
+    min_protein_g: float = 20.0,
+    max_prep_minutes: int = 30,
+    excluded_ingredients: list[str] | None = None,
+    limit: int = 5,
+) -> RankingRequest:
+    return RankingRequest(
+        pantry_items=[] if pantry_items is None else pantry_items,
+        min_protein_g=min_protein_g,
+        max_prep_minutes=max_prep_minutes,
+        excluded_ingredients=(
+            [] if excluded_ingredients is None else excluded_ingredients
+        ),
+        limit=limit,
     )
 
 
@@ -211,3 +231,93 @@ def test_explanation_uses_one_exact_template(protein_g, target, phrase):
         f"(fit {breakdown.protein_fit.value:.4f}); 15 minutes is within "
         "the 30-minute limit (fit 0.5000)."
     )
+
+
+def test_rank_recipes_normalizes_request_and_builds_stable_result_fields():
+    recipe = make_recipe()
+
+    result = rank_recipes(
+        make_request(
+            pantry_items=[" Spinach ", "EGGS", "spinach"],
+            excluded_ingredients=[],
+        ),
+        [recipe],
+    )[0]
+
+    assert result.matched_ingredients == ("eggs", "spinach")
+    assert result.missing_ingredients == ("olive oil",)
+    assert result.required_ingredients == recipe.required_ingredients
+    assert result.score_breakdown.pantry_coverage.value == 0.6667
+    assert result.explanation.startswith("Matched 2 of 3")
+
+
+def test_rank_recipes_applies_exclusion_before_scoring():
+    recipe = make_recipe()
+
+    assert (
+        rank_recipes(
+            make_request(
+                pantry_items=["spinach"],
+                excluded_ingredients=[" SPINACH "],
+            ),
+            [recipe],
+        )
+        == []
+    )
+
+
+def test_rank_recipes_applies_time_filter_but_not_protein_as_hard_filter():
+    too_slow = make_recipe(recipe_id="slow", protein_g=100.0, prep_minutes=31)
+    low_protein = make_recipe(recipe_id="low-protein", protein_g=1.0, prep_minutes=30)
+
+    results = rank_recipes(
+        make_request(min_protein_g=50.0, max_prep_minutes=30),
+        [too_slow, low_protein],
+    )
+
+    assert [result.id for result in results] == ["low-protein"]
+    assert results[0].score_breakdown.protein_fit.value == 0.02
+
+
+def test_rank_recipes_with_empty_pantry_returns_zero_coverage_results():
+    result = rank_recipes(make_request(pantry_items=[]), [make_recipe()])[0]
+
+    assert result.matched_ingredients == ()
+    assert result.missing_ingredients == ("eggs", "spinach", "olive oil")
+    assert result.score_breakdown.pantry_coverage.value == 0.0
+
+
+def test_repeated_identical_rankings_are_equal():
+    request = make_request(pantry_items=["eggs"])
+    recipes = [make_recipe(recipe_id="b"), make_recipe(recipe_id="a")]
+
+    assert rank_recipes(request, recipes) == rank_recipes(request, recipes)
+
+
+def test_equal_exposed_scores_tie_break_by_recipe_id():
+    recipes = [
+        make_recipe(recipe_id="z-recipe", protein_g=10.002),
+        make_recipe(recipe_id="a-recipe", protein_g=10.001),
+    ]
+
+    results = rank_recipes(
+        make_request(min_protein_g=20.0),
+        recipes,
+    )
+
+    assert results[0].final_score == results[1].final_score
+    assert [result.id for result in results] == ["a-recipe", "z-recipe"]
+
+
+def test_limit_is_applied_after_sorting():
+    recipes = [
+        make_recipe(recipe_id="low", required=("missing",), protein_g=0.0),
+        make_recipe(recipe_id="high", required=("eggs",), protein_g=20.0),
+    ]
+
+    results = rank_recipes(
+        make_request(pantry_items=["eggs"], limit=1),
+        recipes,
+    )
+
+    assert [result.id for result in results] == ["high"]

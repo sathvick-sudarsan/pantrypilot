@@ -10,6 +10,14 @@ from pydantic import (
 from pantrypilot.normalization import normalize_ingredients
 
 
+class RankingRequest(BaseModel):
+    pantry_items: list[str]
+    min_protein_g: float
+    max_prep_minutes: int
+    excluded_ingredients: list[str]
+    limit: int
+
+
 class Recipe(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -54,3 +62,13 @@ class ScoreBreakdown(BaseModel):
     pantry_coverage: ScoreComponent
     protein_fit: ScoreComponent
     time_fit: ScoreComponent
+
+
+class RankedRecipe(Recipe):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    final_score: float
+    matched_ingredients: tuple[str, ...]
+    missing_ingredients: tuple[str, ...]
+    score_breakdown: ScoreBreakdown
+    explanation: str
