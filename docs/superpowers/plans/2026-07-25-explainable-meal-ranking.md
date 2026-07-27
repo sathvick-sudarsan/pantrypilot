@@ -1063,7 +1063,7 @@ git commit -m "feat: add reconstructable recipe scoring"
   public `rank_recipes(request, recipes) -> list[RankedRecipe]`. Transport
   boundary constraints are added only after their failing API tests in Task 5.
 
-- [ ] **Step 1: Add a local request helper and failing pipeline test**
+- [ ] **Step 1: Add a local request helper and the first failing pipeline test**
 
 Extend the existing model/ranking imports with `RankingRequest` and
 `rank_recipes`, then append:
@@ -1116,29 +1116,11 @@ Expected initially: importing `RankingRequest` or `rank_recipes` fails. Apply
 the Global Constraints import guard and rerun until the focused test reports
 `FAILED` for missing pipeline behavior.
 
-- [ ] **Step 2: Implement the minimum request/result models and orchestration**
+- [ ] **Step 2: Add all remaining core orchestration tests before production**
 
-Add `RankingRequest` with the five exact field names and plain field types from
-**Exact Interfaces**, no defaults, and no boundary constraints yet. Add frozen,
-extra-forbidden `RankedRecipe` with the exact result fields.
-
-In `rank_recipes`:
-
-1. Normalize request pantry and exclusions once.
-2. Convert each to a set for membership checks.
-3. Skip ineligible recipes before matching/scoring.
-4. Calculate matched and missing ingredients.
-5. Calculate the breakdown and final score.
-6. Render the explanation from that breakdown.
-7. Construct an explicit `RankedRecipe` from recipe and ranking fields.
-
-Do not mutate the request or catalog.
-
-Run the focused test again. Expected: PASS.
-
-- [ ] **Step 3: Add failing integrated hard-filter tests**
-
-Append:
+While the import guard is still active, append each test below one at a time
+and run that named test until it reports `FAILED` for missing pipeline
+behavior:
 
 ```python
 def test_rank_recipes_applies_exclusion_before_scoring():
@@ -1174,24 +1156,57 @@ def test_rank_recipes_with_empty_pantry_returns_zero_coverage_results():
     assert result.matched_ingredients == ()
     assert result.missing_ingredients == ("eggs", "spinach", "olive oil")
     assert result.score_breakdown.pantry_coverage.value == 0.0
+
+
+def test_repeated_identical_rankings_are_equal():
+    request = make_request(pantry_items=["eggs"])
+    recipes = [make_recipe(recipe_id="b"), make_recipe(recipe_id="a")]
+
+    assert rank_recipes(request, recipes) == rank_recipes(request, recipes)
 ```
 
-Run these tests and expect FAIL until orchestration uses both normalized hard
-filters and keeps low-protein recipes.
-
-- [ ] **Step 4: Make integrated filtering tests pass**
-
-Reuse `is_eligible`; do not duplicate filter rules inside the loop. Run:
+Use these named commands as the tests are added:
 
 ```powershell
-uv run pytest tests/test_ranking.py -k "rank_recipes_applies or empty_pantry_returns" -v
+uv run pytest tests/test_ranking.py::test_rank_recipes_applies_exclusion_before_scoring -v
+uv run pytest tests/test_ranking.py::test_rank_recipes_applies_time_filter_but_not_protein_as_hard_filter -v
+uv run pytest tests/test_ranking.py::test_rank_recipes_with_empty_pantry_returns_zero_coverage_results -v
+uv run pytest tests/test_ranking.py::test_repeated_identical_rankings_are_equal -v
+```
+
+Expected for every command: one test `FAILED`, never a collection error.
+
+- [ ] **Step 3: Implement the minimum request/result models and orchestration**
+
+Add `RankingRequest` with the five exact field names and plain field types from
+**Exact Interfaces**, no defaults, and no boundary constraints yet. Add frozen,
+extra-forbidden `RankedRecipe` with the exact result fields.
+
+In `rank_recipes`:
+
+1. Normalize request pantry and exclusions once.
+2. Convert each to a set for membership checks.
+3. Skip ineligible recipes before matching/scoring.
+4. Calculate matched and missing ingredients.
+5. Calculate the breakdown and final score.
+6. Render the explanation from that breakdown.
+7. Construct an explicit `RankedRecipe` from recipe and ranking fields.
+
+Do not mutate the request or catalog.
+
+Reuse `is_eligible`; do not duplicate filter rules inside the loop. Do not sort
+or limit yet; those behaviors remain for their own later failing tests. Restore
+ordinary top-level imports during the green refactor, then run:
+
+```powershell
+uv run pytest tests/test_ranking.py -k "rank_recipes_normalizes or rank_recipes_applies or empty_pantry_returns or repeated_identical" -v
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Add failing deterministic ordering and limit tests**
+- [ ] **Step 4: Add failing deterministic ordering and limit tests**
 
-Append:
+Append and run each test separately so both behaviors have an observed RED:
 
 ```python
 def test_equal_exposed_scores_tie_break_by_recipe_id():
@@ -1221,24 +1236,18 @@ def test_limit_is_applied_after_sorting():
     )
 
     assert [result.id for result in results] == ["high"]
-
-
-def test_repeated_identical_rankings_are_equal():
-    request = make_request(pantry_items=["eggs"])
-    recipes = [make_recipe(recipe_id="b"), make_recipe(recipe_id="a")]
-
-    assert rank_recipes(request, recipes) == rank_recipes(request, recipes)
 ```
 
 Run:
 
 ```powershell
-uv run pytest tests/test_ranking.py -k "tie_break or limit_is or repeated" -v
+uv run pytest tests/test_ranking.py::test_equal_exposed_scores_tie_break_by_recipe_id -v
+uv run pytest tests/test_ranking.py::test_limit_is_applied_after_sorting -v
 ```
 
-Expected: FAIL until sorting and limiting exist.
+Expected: each named test reports `FAILED` until sorting and limiting exist.
 
-- [ ] **Step 6: Implement exposed-score sorting and post-sort slicing**
+- [ ] **Step 5: Implement exposed-score sorting and post-sort slicing**
 
 Implement:
 
@@ -1265,9 +1274,12 @@ return limit_ranked_recipes(
 )
 ```
 
+- [ ] **Step 6: Run the focused and broader verification**
+
 Run:
 
 ```powershell
+uv run pytest tests/test_ranking.py -k "tie_break or limit_is" -v
 uv run pytest tests/test_ranking.py -v
 uv run pytest tests -v
 uv run ruff format --check src tests
@@ -1923,6 +1935,9 @@ plan and task boundaries listed above.
   later red/green cycle rather than being implemented ahead of a failing test.
 - [x] Task 4 includes `models.py` in both its file list and commit boundary so
   `RankingRequest` and `RankedRecipe` remain owned by the model layer.
+- [x] Task 4 writes and observes failures for pipeline normalization, hard
+  filters, empty pantry behavior, and repeatability before `rank_recipes`;
+  ordering and limiting retain separate later red/green cycles.
 - [x] Every missing-module or missing-symbol red step is converted from a
   collection error into an explicit test failure before production code.
 - [x] The final verification is evidence-based and runs on Python 3.12 through
@@ -1942,6 +1957,9 @@ plan and task boundaries listed above.
   scoring production behavior.
 - The Task 4 correction is approved: `models.py` is included in the task file
   list and commit boundary for `RankingRequest` and `RankedRecipe`.
+- The additional Task 4 TDD correction is approved: core orchestration and
+  repeatability tests move before pipeline production code, while sorting and
+  limiting remain later focused failing tests.
 - `calories` is specified as a non-negative number rather than specifically an
   integer or float. The model preserves either JSON numeric form with
   `int | float`; scoring does not depend on calories.
