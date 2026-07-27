@@ -13,19 +13,25 @@ a recipe chatbot or external-API wrapper.
 
 ## Current status
 
-The repository is at the project-foundation stage. No application code or
-dependencies have been added.
-
-The first vertical slice is **Feature 001: Explainable Pantry-Based Meal
-Ranking**. A versioned API will rank an in-memory recipe catalog from pantry
-ingredients and constraints, returning score components and deterministic
+**Feature 001: Explainable Pantry-Based Meal Ranking** is implemented.
+`POST /v1/meal-rankings` ranks the in-memory recipe catalog from pantry
+ingredients and constraints, returning deterministic score evidence and fixed
 explanations.
+
+## Quick start
+
+```powershell
+uv sync --locked --python 3.12
+uv run pytest
+uv run uvicorn pantrypilot.app:app --app-dir src
+```
 
 ## Project documents
 
 - [Product vision](docs/product/vision.md)
 - [Roadmap](docs/roadmap.md)
 - [Feature 001 design](docs/superpowers/specs/2026-07-25-explainable-meal-ranking-design.md)
+- [Feature 001 learning guide](docs/learning/001-explainable-meal-ranking.md)
 - [Contributor instructions](AGENTS.md)
 
 ## Engineering workflow
