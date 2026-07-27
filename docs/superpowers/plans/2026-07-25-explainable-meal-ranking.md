@@ -1051,6 +1051,7 @@ git commit -m "feat: add reconstructable recipe scoring"
 
 **Files:**
 
+- Modify: `src/pantrypilot/models.py`
 - Modify: `src/pantrypilot/ranking.py`
 - Modify: `tests/test_ranking.py`
 
@@ -1283,7 +1284,7 @@ ingredient order, and post-sort limiting. After the review is clean, use the
 authorized task commit:
 
 ```powershell
-git add src/pantrypilot/ranking.py tests/test_ranking.py
+git add src/pantrypilot/models.py src/pantrypilot/ranking.py tests/test_ranking.py
 git commit -m "feat: add deterministic meal ranking pipeline"
 ```
 
@@ -1920,6 +1921,8 @@ plan and task boundaries listed above.
   bound tests all fail before `calculate_score` is implemented.
 - [x] Zero protein-target and zero time-maximum branches each follow their own
   later red/green cycle rather than being implemented ahead of a failing test.
+- [x] Task 4 includes `models.py` in both its file list and commit boundary so
+  `RankingRequest` and `RankedRecipe` remain owned by the model layer.
 - [x] Every missing-module or missing-symbol red step is converted from a
   collection error into an explicit test failure before production code.
 - [x] The final verification is evidence-based and runs on Python 3.12 through
@@ -1937,6 +1940,8 @@ plan and task boundaries listed above.
 - The Task 3 correction is approved: score models live in `models.py`, and
   precision/reconstruction tests are written and observed failing before
   scoring production behavior.
+- The Task 4 correction is approved: `models.py` is included in the task file
+  list and commit boundary for `RankingRequest` and `RankedRecipe`.
 - `calories` is specified as a non-negative number rather than specifically an
   integer or float. The model preserves either JSON numeric form with
   `int | float`; scoring does not depend on calories.
