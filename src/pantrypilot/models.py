@@ -1,3 +1,4 @@
+from math import isfinite
 from typing import Annotated
 
 from pydantic import (
@@ -20,6 +21,11 @@ class RankingRequest(BaseModel):
     limit: Annotated[StrictInt, Field(ge=1, le=50)]
 
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("min_protein_g", mode="before")
+    @classmethod
+    def replace_non_finite_protein_target(cls, value: object) -> object:
+        return None if isinstance(value, float) and not isfinite(value) else value
 
     @field_validator("pantry_items", "excluded_ingredients")
     @classmethod

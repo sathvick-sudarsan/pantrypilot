@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -175,11 +177,13 @@ def test_meal_rankings_rejects_wrong_numeric_types(field, value):
     assert field in response.text
 
 
-@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
 def test_meal_rankings_rejects_non_finite_protein_target(value):
-    request = {**VALID_REQUEST, "min_protein_g": value}
-
-    response = safe_client.post("/v1/meal-rankings", json=request)
+    response = safe_client.post(
+        "/v1/meal-rankings",
+        content=json.dumps({**VALID_REQUEST, "min_protein_g": value}),
+        headers={"content-type": "application/json"},
+    )
 
     assert response.status_code == 422
     assert "min_protein_g" in response.text
