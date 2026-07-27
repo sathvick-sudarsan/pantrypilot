@@ -1306,6 +1306,7 @@ git commit -m "feat: add deterministic meal ranking pipeline"
 
 **Files:**
 
+- Modify: `src/pantrypilot/models.py`
 - Create: `src/pantrypilot/app.py`
 - Create: `tests/test_api.py`
 
@@ -1320,6 +1321,7 @@ git commit -m "feat: add deterministic meal ranking pipeline"
 Create `tests/test_api.py`:
 
 ```python
+import pytest
 from fastapi.testclient import TestClient
 
 import pantrypilot.app as app_module
@@ -1384,7 +1386,7 @@ def test_meal_rankings_returns_known_catalog_result():
     }
 ```
 
-- [ ] **Step 2: Run the focused test and inspect the expected failure**
+- [ ] **Step 2: Observe the first RED, then add framework-backed tests before the route**
 
 Run:
 
@@ -1395,6 +1397,107 @@ uv run pytest tests/test_api.py::test_meal_rankings_returns_known_catalog_result
 Expected initially: collection reports that `pantrypilot.app` does not exist.
 Apply the Global Constraints import guard and rerun until the focused test
 reports `FAILED` for missing endpoint behavior.
+
+While that guard is active, append each framework-backed or route acceptance
+rule below one at a time. Run its named test immediately and confirm an
+explicit `FAILED` result before creating `app.py`:
+
+```python
+def test_meal_rankings_returns_successful_empty_result():
+    request = {
+        **VALID_REQUEST,
+        "pantry_items": [],
+        "max_prep_minutes": 0,
+        "excluded_ingredients": [],
+        "limit": 5,
+    }
+
+    response = client.post("/v1/meal-rankings", json=request)
+
+    assert response.status_code == 200
+    assert response.json() == {"results": [], "returned_count": 0}
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    [
+        "pantry_items",
+        "min_protein_g",
+        "max_prep_minutes",
+        "excluded_ingredients",
+        "limit",
+    ],
+)
+def test_meal_rankings_requires_every_request_field(missing_field):
+    request = {**VALID_REQUEST}
+    request.pop(missing_field)
+
+    response = client.post("/v1/meal-rankings", json=request)
+
+    assert response.status_code == 422
+    assert missing_field in response.text
+
+
+def test_meal_rankings_rejects_fractional_integer():
+    response = client.post(
+        "/v1/meal-rankings",
+        json={**VALID_REQUEST, "max_prep_minutes": 30.5},
+    )
+
+    assert response.status_code == 422
+    assert "max_prep_minutes" in response.text
+
+
+def test_meal_rankings_rejects_malformed_json():
+    response = client.post(
+        "/v1/meal-rankings",
+        content="{",
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_unexpected_error_returns_500_without_internal_details(monkeypatch):
+    def fail_ranking(*_args, **_kwargs):
+        raise RuntimeError("private implementation detail")
+
+    monkeypatch.setattr(app_module, "rank_recipes", fail_ranking)
+    safe_client = TestClient(
+        app_module.app,
+        raise_server_exceptions=False,
+    )
+
+    response = safe_client.post(
+        "/v1/meal-rankings",
+        json=VALID_REQUEST,
+    )
+
+    assert response.status_code == 500
+    assert "private implementation detail" not in response.text
+
+
+def test_identical_http_requests_return_identical_ordered_responses():
+    first = client.post("/v1/meal-rankings", json=VALID_REQUEST)
+    second = client.post("/v1/meal-rankings", json=VALID_REQUEST)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+```
+
+Run each new rule separately:
+
+```powershell
+uv run pytest tests/test_api.py::test_meal_rankings_returns_successful_empty_result -v
+uv run pytest tests/test_api.py::test_meal_rankings_requires_every_request_field -v
+uv run pytest tests/test_api.py::test_meal_rankings_rejects_fractional_integer -v
+uv run pytest tests/test_api.py::test_meal_rankings_rejects_malformed_json -v
+uv run pytest tests/test_api.py::test_unexpected_error_returns_500_without_internal_details -v
+uv run pytest tests/test_api.py::test_identical_http_requests_return_identical_ordered_responses -v
+```
+
+Expected for every command: the test or parameterized rule reports `FAILED`
+for the missing endpoint, never a collection error.
 
 - [ ] **Step 3: Implement the thin route**
 
@@ -1423,56 +1526,27 @@ def create_meal_ranking(request: RankingRequest) -> RankingResponse:
 Do not catch Pydantic/FastAPI validation errors and do not duplicate ranking
 rules in the route.
 
-Run the focused test again. Expected: PASS.
+Restore ordinary top-level imports during the green refactor, then run:
 
-- [ ] **Step 4: Add the failing empty-result contract test**
-
-Append:
-
-```python
-def test_meal_rankings_returns_successful_empty_result():
-    request = {
-        **VALID_REQUEST,
-        "pantry_items": [],
-        "max_prep_minutes": 0,
-        "excluded_ingredients": [],
-        "limit": 5,
-    }
-
-    response = client.post("/v1/meal-rankings", json=request)
-
-    assert response.status_code == 200
-    assert response.json() == {"results": [], "returned_count": 0}
+```powershell
+uv run pytest tests/test_api.py -k "known_catalog or successful_empty or requires_every or fractional_integer or malformed_json or unexpected_error or identical_http" -v
 ```
 
-Run the focused test. Expected: PASS once the route uses the catalog and
-pipeline without treating no matches as an exception.
+Expected: all framework-backed and route acceptance tests PASS.
 
-- [ ] **Step 5: Add all request-validation contract tests**
+- [ ] **Step 4: Add only genuinely missing validation constraints as failing tests**
 
-Extend the import block with `import pytest`, then append:
+Create a non-raising client for invalid inputs that currently reach domain
+exceptions:
 
 ```python
-@pytest.mark.parametrize(
-    "missing_field",
-    [
-        "pantry_items",
-        "min_protein_g",
-        "max_prep_minutes",
-        "excluded_ingredients",
-        "limit",
-    ],
-)
-def test_meal_rankings_requires_every_request_field(missing_field):
-    request = {**VALID_REQUEST}
-    request.pop(missing_field)
+safe_client = TestClient(app_module.app, raise_server_exceptions=False)
+```
 
-    response = client.post("/v1/meal-rankings", json=request)
+Append each parameterized rule or named test below one at a time and run it
+before adding any request constraint:
 
-    assert response.status_code == 422
-    assert missing_field in response.text
-
-
+```python
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -1496,7 +1570,6 @@ def test_meal_rankings_rejects_invalid_numeric_boundaries(field, value):
     ("field", "value"),
     [
         ("min_protein_g", "25.0"),
-        ("max_prep_minutes", 30.5),
         ("max_prep_minutes", True),
         ("limit", 5.0),
         ("limit", True),
@@ -1516,7 +1589,7 @@ def test_meal_rankings_rejects_wrong_numeric_types(field, value):
 def test_meal_rankings_rejects_non_finite_protein_target(value):
     request = {**VALID_REQUEST, "min_protein_g": value}
 
-    response = client.post("/v1/meal-rankings", json=request)
+    response = safe_client.post("/v1/meal-rankings", json=request)
 
     assert response.status_code == 422
     assert "min_protein_g" in response.text
@@ -1530,7 +1603,7 @@ def test_meal_rankings_rejects_non_finite_protein_target(value):
     ],
 )
 def test_meal_rankings_rejects_blank_ingredient_values(field, value):
-    response = client.post(
+    response = safe_client.post(
         "/v1/meal-rankings",
         json={**VALID_REQUEST, field: value},
     )
@@ -1547,27 +1620,26 @@ def test_meal_rankings_rejects_unknown_request_fields():
 
     assert response.status_code == 422
     assert "ranking_model" in response.text
-
-
-def test_meal_rankings_rejects_malformed_json():
-    response = client.post(
-        "/v1/meal-rankings",
-        content="{",
-        headers={"content-type": "application/json"},
-    )
-
-    assert response.status_code == 422
 ```
 
-Run:
+Run each new rule immediately after adding it:
 
 ```powershell
-uv run pytest tests/test_api.py -k "requires or rejects" -v
+uv run pytest tests/test_api.py::test_meal_rankings_rejects_invalid_numeric_boundaries -v
+uv run pytest tests/test_api.py::test_meal_rankings_rejects_wrong_numeric_types -v
+uv run pytest tests/test_api.py::test_meal_rankings_rejects_non_finite_protein_target -v
+uv run pytest tests/test_api.py::test_meal_rankings_rejects_blank_ingredient_values -v
+uv run pytest tests/test_api.py::test_meal_rankings_rejects_unknown_request_fields -v
 ```
 
-Expected before final model constraints: one or more tests FAIL with a `200` or
-an incorrect schema. Tighten only the Pydantic fields/validators needed to
-match the approved boundaries:
+Expected before final model constraints: every parameterized rule or named
+test reports `FAILED` with a `200` or safe generic `500`, never an uncaught
+exception or collection error.
+
+- [ ] **Step 5: Implement and pass the exact request constraints**
+
+Tighten only the Pydantic fields/validators needed to match the approved
+boundaries:
 
 ```python
 min_protein_g: Annotated[FiniteFloat, Field(ge=0, strict=True)]
@@ -1587,56 +1659,17 @@ def reject_blank_ingredients(cls, values: list[str]) -> list[str]:
     return values
 ```
 
-Run the focused validation group again. Expected: PASS with FastAPI's standard
-field-level `422` responses.
-
-- [ ] **Step 6: Add the failing generic-500 test**
-
-Append:
-
-```python
-def test_unexpected_error_returns_500_without_internal_details(monkeypatch):
-    def fail_ranking(*_args, **_kwargs):
-        raise RuntimeError("private implementation detail")
-
-    monkeypatch.setattr(app_module, "rank_recipes", fail_ranking)
-    safe_client = TestClient(
-        app_module.app,
-        raise_server_exceptions=False,
-    )
-
-    response = safe_client.post(
-        "/v1/meal-rankings",
-        json=VALID_REQUEST,
-    )
-
-    assert response.status_code == 500
-    assert "private implementation detail" not in response.text
-```
-
-Also append the repeated-request HTTP acceptance test:
-
-```python
-def test_identical_http_requests_return_identical_ordered_responses():
-    first = client.post("/v1/meal-rankings", json=VALID_REQUEST)
-    second = client.post("/v1/meal-rankings", json=VALID_REQUEST)
-
-    assert first.status_code == second.status_code == 200
-    assert first.json() == second.json()
-```
-
-Run:
+Run the focused validation group:
 
 ```powershell
-uv run pytest tests/test_api.py -k "unexpected_error or identical_http" -v
+uv run pytest tests/test_api.py -k "rejects_invalid or rejects_wrong or rejects_non_finite or rejects_blank or rejects_unknown" -v
 ```
 
-Expected: both tests PASS. FastAPI/Starlette's default response supplies the
-generic 500 behavior, and the pure deterministic pipeline supplies identical
-ordered HTTP results. Do not add a custom exception hierarchy or handler unless
-the framework default leaks internals.
+Expected: PASS with FastAPI's standard field-level `422` responses. Do not add
+a custom exception hierarchy or handler; the earlier generic-500 acceptance
+test already proves the framework default does not leak internal details.
 
-- [ ] **Step 7: Run API, full-suite, and static checks**
+- [ ] **Step 6: Run API, full-suite, and static checks**
 
 Run:
 
@@ -1649,7 +1682,7 @@ uv run ruff check src tests
 
 Expected: all tests and checks PASS.
 
-- [ ] **Step 8: Review and commit the boundary**
+- [ ] **Step 7: Review and commit the boundary**
 
 Run `superpowers:requesting-code-review` with emphasis on the exact path,
 required/unknown fields, finite-number validation, no-result semantics,
@@ -1938,6 +1971,11 @@ plan and task boundaries listed above.
 - [x] Task 4 writes and observes failures for pipeline normalization, hard
   filters, empty pantry behavior, and repeatability before `rank_recipes`;
   ordering and limiting retain separate later red/green cycles.
+- [x] Task 5 includes `models.py`, puts route/framework-default acceptance
+  tests before `app.py`, and reserves the later validation RED/GREEN cycle for
+  constraints that the plain Task 4 request model does not already enforce.
+- [x] Task 5 uses a non-raising client only for RED validation cases that would
+  otherwise escape as domain exceptions, preserving explicit test failures.
 - [x] Every missing-module or missing-symbol red step is converted from a
   collection error into an explicit test failure before production code.
 - [x] The final verification is evidence-based and runs on Python 3.12 through
@@ -1960,6 +1998,9 @@ plan and task boundaries listed above.
 - The additional Task 4 TDD correction is approved: core orchestration and
   repeatability tests move before pipeline production code, while sorting and
   limiting remain later focused failing tests.
+- The Task 5 correction is approved: `models.py` is explicit task scope,
+  framework-backed acceptance tests precede route production, and genuinely
+  missing validation constraints retain their own later failing tests.
 - `calories` is specified as a non-negative number rather than specifically an
   integer or float. The model preserves either JSON numeric form with
   `int | float`; scoring does not depend on calories.
