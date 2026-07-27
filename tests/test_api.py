@@ -190,6 +190,29 @@ def test_meal_rankings_rejects_non_finite_protein_target(value):
 
 
 @pytest.mark.parametrize(
+    ("request_update", "expected_field"),
+    [
+        ({"max_prep_minutes": float("nan")}, "max_prep_minutes"),
+        ({"limit": float("inf")}, "limit"),
+        ({"pantry_items": ["eggs", float("-inf")]}, "pantry_items"),
+        ({"excluded_ingredients": [float("nan")]}, "excluded_ingredients"),
+        ({"ranking_options": {"weight": float("inf")}}, "ranking_options"),
+    ],
+)
+def test_meal_rankings_rejects_non_finite_values_anywhere_in_payload(
+    request_update, expected_field
+):
+    response = safe_client.post(
+        "/v1/meal-rankings",
+        content=json.dumps({**VALID_REQUEST, **request_update}),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert expected_field in response.text
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("pantry_items", ["eggs", "   "]),
