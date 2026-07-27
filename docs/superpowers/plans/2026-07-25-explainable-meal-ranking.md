@@ -702,27 +702,33 @@ git commit -m "feat: add ingredient matching and eligibility rules"
 
 **Files:**
 
+- Modify: `src/pantrypilot/models.py`
 - Modify: `src/pantrypilot/ranking.py`
 - Modify: `tests/test_ranking.py`
 
 **Interfaces:**
 
 - Consumes: `Recipe`.
-- Produces: frozen `ScoreComponent` and `ScoreBreakdown` models,
+- Produces: frozen `ScoreComponent` and `ScoreBreakdown` models in `models.py`,
   `calculate_score(...) -> tuple[float, ScoreBreakdown]`, and
   `render_explanation(...) -> str`.
 
-- [ ] **Step 1: Add failing pantry-coverage and protein-fit tests**
+- [ ] **Step 1: Add the complete core scoring tests before scoring production code**
 
 Extend the import block with:
 
 ```python
+from decimal import Decimal
+
 import pytest
 
 from pantrypilot.ranking import calculate_score
 ```
 
-Then append tests that directly call `calculate_score`:
+Use the Global Constraints import guard so the test module collects while
+`calculate_score` is absent. Then append tests that directly call
+`calculate_score` for every ordinary scoring boundary, full-precision
+contribution rounding, exact reconstruction, and score bounds:
 
 ```python
 
@@ -747,12 +753,9 @@ def test_pantry_coverage_handles_empty_partial_and_complete_matches(
         (10.0, 20.0, 0.5),
         (20.0, 20.0, 1.0),
         (30.0, 20.0, 1.0),
-        (0.0, 0.0, 1.0),
     ],
 )
-def test_protein_fit_is_capped_and_zero_target_is_well_defined(
-    protein_g, target, expected
-):
+def test_protein_fit_is_capped(protein_g, target, expected):
     _, breakdown = calculate_score(
         make_recipe(protein_g=protein_g),
         matched_count=0,
@@ -761,68 +764,17 @@ def test_protein_fit_is_capped_and_zero_target_is_well_defined(
     )
 
     assert breakdown.protein_fit.value == expected
-```
 
-- [ ] **Step 2: Run the focused tests and inspect the expected failure**
 
-Run:
-
-```powershell
-uv run pytest tests/test_ranking.py -k "coverage or protein_fit" -v
-```
-
-Expected initially: importing `calculate_score` fails. Apply the Global
-Constraints import guard and rerun until the focused test reports `FAILED` for
-missing score behavior.
-
-- [ ] **Step 3: Implement score models and the nonzero-time scoring path**
-
-Add constants:
-
-```python
-PANTRY_WEIGHT = 0.70
-PROTEIN_WEIGHT = 0.20
-TIME_WEIGHT = 0.10
-SCORE_DECIMALS = 4
-```
-
-Add frozen, extra-forbidden `ScoreComponent` and `ScoreBreakdown` Pydantic
-models with the exact fields under **Exact Interfaces**.
-
-Calculate pantry coverage from `matched_count /
-len(recipe.required_ingredients)`. Calculate protein fit as `1.0` for a zero
-target, otherwise `min(recipe.protein_g / min_protein_g, 1.0)`. Keep these
-values unrounded until each contribution is calculated. For the nonzero
-`max_prep_minutes` used by the current tests, calculate time fit as
-`1 - recipe.prep_minutes / max_prep_minutes` so `calculate_score` can return a
-complete breakdown. Leave only the zero-maximum branch for the next focused
-failing test.
-
-- [ ] **Step 4: Run the focused tests**
-
-Run:
-
-```powershell
-uv run pytest tests/test_ranking.py -k "coverage or protein_fit" -v
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Add failing time-boundary tests**
-
-Append:
-
-```python
 @pytest.mark.parametrize(
     ("prep_minutes", "maximum", "expected"),
     [
         (0, 30, 1.0),
         (15, 30, 0.5),
         (30, 30, 0.0),
-        (0, 0, 1.0),
     ],
 )
-def test_time_fit_handles_zero_between_maximum_and_zero_maximum(
+def test_time_fit_handles_zero_between_and_maximum(
     prep_minutes, maximum, expected
 ):
     _, breakdown = calculate_score(
@@ -833,36 +785,8 @@ def test_time_fit_handles_zero_between_maximum_and_zero_maximum(
     )
 
     assert breakdown.time_fit.value == expected
-```
 
-Run:
 
-```powershell
-uv run pytest tests/test_ranking.py -k "time_fit" -v
-```
-
-Expected: FAIL until `time_fit` uses `1.0` when the maximum is zero and
-otherwise `1 - prep_minutes / max_prep_minutes`.
-
-- [ ] **Step 6: Implement and pass the time score**
-
-Implement the exact formula. `calculate_score` is called only for recipes that
-already passed the hard time filter; do not add clamping that changes the
-approved formula.
-
-Run:
-
-```powershell
-uv run pytest tests/test_ranking.py -k "time_fit" -v
-```
-
-Expected: PASS.
-
-- [ ] **Step 7: Add failing full-precision, rounding, and reconstruction tests**
-
-Extend the import block with `from decimal import Decimal`, then append:
-
-```python
 def test_contributions_use_full_precision_before_four_decimal_rounding():
     recipe = make_recipe(required=tuple(f"item-{i}" for i in range(9)))
 
@@ -899,18 +823,40 @@ def test_final_score_is_exactly_reconstructable_from_returned_contributions():
     assert 0.0 <= final_score <= 1.0
 ```
 
+- [ ] **Step 2: Run the focused tests and inspect the expected failure**
+
 Run:
 
 ```powershell
-uv run pytest tests/test_ranking.py -k "precision or reconstructable" -v
+uv run pytest tests/test_ranking.py -k "coverage or protein_fit or time_fit or precision or reconstructable" -v
 ```
 
-Expected: FAIL until contributions are rounded from full-precision values and
-the final score is `round(sum(returned_contributions), 4)`.
+Expected initially: importing `calculate_score` fails. Apply the Global
+Constraints import guard and rerun until the focused test reports `FAILED` for
+missing score behavior.
 
-- [ ] **Step 8: Implement the exact rounding sequence**
+- [ ] **Step 3: Implement score models and the ordinary scoring path**
 
-Construct each `ScoreComponent` as:
+In `models.py`, add the exact frozen, extra-forbidden `ScoreComponent` and
+`ScoreBreakdown` Pydantic models declared under **Exact Interfaces**.
+
+In `ranking.py`, import those score models and add constants:
+
+```python
+PANTRY_WEIGHT = 0.70
+PROTEIN_WEIGHT = 0.20
+TIME_WEIGHT = 0.10
+SCORE_DECIMALS = 4
+```
+
+Calculate pantry coverage from `matched_count /
+len(recipe.required_ingredients)`. For the positive protein targets in the
+current tests, calculate `min(recipe.protein_g / min_protein_g, 1.0)`. For the
+nonzero time maximums in the current tests, calculate
+`1 - recipe.prep_minutes / max_prep_minutes`.
+
+Keep all component values at full precision until each contribution is
+calculated. Construct each `ScoreComponent` as:
 
 ```python
 ScoreComponent(
@@ -934,12 +880,91 @@ final_score = round(
 ```
 
 Use Python's built-in `round`; do not round component values before calculating
-their contributions.
+their contributions. Leave only the zero-protein-target and zero-time-maximum
+branches for their own later focused failing tests.
+
+- [ ] **Step 4: Run the focused tests**
 
 Run:
 
 ```powershell
-uv run pytest tests/test_ranking.py -k "precision or reconstructable" -v
+uv run pytest tests/test_ranking.py -k "coverage or protein_fit or time_fit or precision or reconstructable" -v
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Add the failing zero-protein-target test**
+
+Append:
+
+```python
+def test_protein_fit_is_one_when_target_is_zero():
+    _, breakdown = calculate_score(
+        make_recipe(protein_g=0.0),
+        matched_count=0,
+        min_protein_g=0.0,
+        max_prep_minutes=20,
+    )
+
+    assert breakdown.protein_fit.value == 1.0
+```
+
+Run:
+
+```powershell
+uv run pytest tests/test_ranking.py -k "target_is_zero" -v
+```
+
+Expected: FAIL because the ordinary formula divides by zero.
+
+- [ ] **Step 6: Implement and pass the zero-protein-target branch**
+
+Use protein fit `1.0` when `min_protein_g == 0`; otherwise retain the ordinary
+capped formula.
+
+Run:
+
+```powershell
+uv run pytest tests/test_ranking.py -k "protein_fit or precision or reconstructable" -v
+```
+
+Expected: PASS.
+
+- [ ] **Step 7: Add the failing zero-time-maximum test**
+
+Append:
+
+```python
+def test_time_fit_is_one_when_maximum_is_zero():
+    _, breakdown = calculate_score(
+        make_recipe(prep_minutes=0),
+        matched_count=0,
+        min_protein_g=20.0,
+        max_prep_minutes=0,
+    )
+
+    assert breakdown.time_fit.value == 1.0
+```
+
+Run:
+
+```powershell
+uv run pytest tests/test_ranking.py -k "maximum_is_zero" -v
+```
+
+Expected: FAIL because the ordinary formula divides by zero.
+
+- [ ] **Step 8: Implement and pass the zero-time-maximum branch**
+
+Use time fit `1.0` when `max_prep_minutes == 0`; otherwise retain
+`1 - recipe.prep_minutes / max_prep_minutes`. `calculate_score` is called only
+for recipes that already passed the hard time filter; do not add clamping that
+changes the approved formula.
+
+Run:
+
+```powershell
+uv run pytest tests/test_ranking.py -k "time_fit or precision or reconstructable" -v
 ```
 
 Expected: PASS.
@@ -1016,7 +1041,7 @@ explanation/data agreement. After the review is clean, use the authorized task
 commit:
 
 ```powershell
-git add src/pantrypilot/ranking.py tests/test_ranking.py
+git add src/pantrypilot/models.py src/pantrypilot/ranking.py tests/test_ranking.py
 git commit -m "feat: add reconstructable recipe scoring"
 ```
 
@@ -1843,9 +1868,9 @@ plan and task boundaries listed above.
 | Inclusive maximum preparation time | boundary eligibility tests |
 | Partial and complete coverage | parameterized pantry-coverage test |
 | Protein fit below, at, above | parameterized protein-fit test |
-| Zero protein target | parameterized protein-fit test |
+| Zero protein target | dedicated zero-target protein-fit test |
 | Time fit at zero, between, maximum | parameterized time-fit test |
-| Zero-minute maximum | parameterized `(0, 0, 1.0)` time-fit test |
+| Zero-minute maximum | dedicated zero-maximum time-fit test |
 | Four-decimal contributions/final score | full-precision `2/9` test and exact reconstruction test |
 | Deterministic ID tie-break | `test_equal_exposed_scores_tie_break_by_recipe_id` |
 | Limit after sorting | `test_limit_is_applied_after_sorting` |
@@ -1890,6 +1915,11 @@ plan and task boundaries listed above.
 - [x] Dedicated normalization tests are created and observed failing in Task 1
   before `normalize_ingredients` is implemented; Task 2 adds no after-the-fact
   normalization tests.
+- [x] Task 3 declares `models.py` as the owner of score response shapes, and
+  ordinary scoring, full-precision contribution, reconstruction, and score
+  bound tests all fail before `calculate_score` is implemented.
+- [x] Zero protein-target and zero time-maximum branches each follow their own
+  later red/green cycle rather than being implemented ahead of a failing test.
 - [x] Every missing-module or missing-symbol red step is converted from a
   collection error into an explicit test failure before production code.
 - [x] The final verification is evidence-based and runs on Python 3.12 through
@@ -1904,6 +1934,9 @@ plan and task boundaries listed above.
 - The four-record representative catalog is approved. Domain tests still use
   local fixtures so catalog choices do not define scoring behavior.
 - Python's built-in `round` is approved for every four-decimal rounding step.
+- The Task 3 correction is approved: score models live in `models.py`, and
+  precision/reconstruction tests are written and observed failing before
+  scoring production behavior.
 - `calories` is specified as a non-negative number rather than specifically an
   integer or float. The model preserves either JSON numeric form with
   `int | float`; scoring does not depend on calories.
