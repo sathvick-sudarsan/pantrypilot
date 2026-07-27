@@ -129,11 +129,15 @@ The tasks below must keep these names and signatures consistent:
 # pantrypilot.normalization
 def normalize_ingredients(values: Iterable[str]) -> tuple[str, ...]: ...
 
+
 # pantrypilot.catalog
 def load_catalog(
     records: Iterable[Mapping[str, object]],
 ) -> tuple[Recipe, ...]: ...
+
+
 CATALOG: tuple[Recipe, ...]
+
 
 # pantrypilot.ranking
 def is_eligible(
@@ -142,10 +146,12 @@ def is_eligible(
     max_prep_minutes: int,
 ) -> bool: ...
 
+
 def match_ingredients(
     recipe: Recipe,
     pantry_items: Collection[str],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]: ...
+
 
 def calculate_score(
     recipe: Recipe,
@@ -153,6 +159,7 @@ def calculate_score(
     min_protein_g: float,
     max_prep_minutes: int,
 ) -> tuple[float, ScoreBreakdown]: ...
+
 
 def render_explanation(
     recipe: Recipe,
@@ -162,14 +169,17 @@ def render_explanation(
     score_breakdown: ScoreBreakdown,
 ) -> str: ...
 
+
 def sort_ranked_recipes(
     recipes: Iterable[RankedRecipe],
 ) -> list[RankedRecipe]: ...
+
 
 def limit_ranked_recipes(
     recipes: Sequence[RankedRecipe],
     limit: int,
 ) -> list[RankedRecipe]: ...
+
 
 def rank_recipes(
     request: RankingRequest,
@@ -187,6 +197,7 @@ class RankingRequest(BaseModel):
     excluded_ingredients: list[str]
     limit: int
 
+
 class Recipe(BaseModel):
     id: str
     name: str
@@ -195,15 +206,18 @@ class Recipe(BaseModel):
     protein_g: float
     prep_minutes: int
 
+
 class ScoreComponent(BaseModel):
     value: float
     weight: float
     contribution: float
 
+
 class ScoreBreakdown(BaseModel):
     pantry_coverage: ScoreComponent
     protein_fit: ScoreComponent
     time_fit: ScoreComponent
+
 
 class RankedRecipe(Recipe):
     final_score: float
@@ -211,6 +225,7 @@ class RankedRecipe(Recipe):
     missing_ingredients: tuple[str, ...]
     score_breakdown: ScoreBreakdown
     explanation: str
+
 
 class RankingResponse(BaseModel):
     results: list[RankedRecipe]
@@ -339,9 +354,11 @@ from pantrypilot.normalization import normalize_ingredients
 
 
 def test_normalize_ingredients_trims_lowercases_and_stably_deduplicates():
-    assert normalize_ingredients(
-        [" Eggs ", "spinach", "EGGS", "Olive  Oil"]
-    ) == ("eggs", "spinach", "olive  oil")
+    assert normalize_ingredients([" Eggs ", "spinach", "EGGS", "Olive  Oil"]) == (
+        "eggs",
+        "spinach",
+        "olive  oil",
+    )
 
 
 def test_normalize_ingredients_rejects_blank_values():
@@ -482,9 +499,7 @@ ingredients in an after-validator:
 ```python
 @field_validator("required_ingredients")
 @classmethod
-def normalize_required_ingredients(
-    cls, values: tuple[str, ...]
-) -> tuple[str, ...]:
+def normalize_required_ingredients(cls, values: tuple[str, ...]) -> tuple[str, ...]:
     return normalize_ingredients(values)
 ```
 
@@ -580,22 +595,16 @@ def test_empty_pantry_marks_every_required_ingredient_missing():
 
 
 def test_matching_is_exact_not_substring_plural_or_synonym_based():
-    recipe = make_recipe(
-        required=("tomatoes", "olive oil", "garbanzo beans")
-    )
+    recipe = make_recipe(required=("tomatoes", "olive oil", "garbanzo beans"))
 
-    matched, missing = match_ingredients(
-        recipe, {"tomato", "oil", "chickpeas"}
-    )
+    matched, missing = match_ingredients(recipe, {"tomato", "oil", "chickpeas"})
 
     assert matched == ()
     assert missing == recipe.required_ingredients
 
 
 def test_matching_preserves_normalized_recipe_order():
-    matched, missing = match_ingredients(
-        make_recipe(), {"spinach", "eggs"}
-    )
+    matched, missing = match_ingredients(make_recipe(), {"spinach", "eggs"})
 
     assert matched == ("eggs", "spinach")
     assert missing == ("olive oil",)
@@ -644,12 +653,9 @@ def is_eligible(
     excluded_ingredients: Collection[str],
     max_prep_minutes: int,
 ) -> bool:
-    return (
-        recipe.prep_minutes <= max_prep_minutes
-        and not set(recipe.required_ingredients).intersection(
-            excluded_ingredients
-        )
-    )
+    return recipe.prep_minutes <= max_prep_minutes and not set(
+        recipe.required_ingredients
+    ).intersection(excluded_ingredients)
 
 
 def match_ingredients(
@@ -658,9 +664,7 @@ def match_ingredients(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     pantry = set(pantry_items)
     matched = tuple(
-        ingredient
-        for ingredient in recipe.required_ingredients
-        if ingredient in pantry
+        ingredient for ingredient in recipe.required_ingredients if ingredient in pantry
     )
     missing = tuple(
         ingredient
@@ -731,7 +735,6 @@ Use the Global Constraints import guard so the test module collects while
 contribution rounding, exact reconstruction, and score bounds:
 
 ```python
-
 @pytest.mark.parametrize(
     ("matched_count", "expected"),
     [(0, 0.0), (1, 0.3333), (3, 1.0)],
@@ -740,8 +743,7 @@ def test_pantry_coverage_handles_empty_partial_and_complete_matches(
     matched_count, expected
 ):
     _, breakdown = calculate_score(
-        make_recipe(), matched_count, min_protein_g=20.0,
-        max_prep_minutes=20
+        make_recipe(), matched_count, min_protein_g=20.0, max_prep_minutes=20
     )
 
     assert breakdown.pantry_coverage.value == expected
@@ -774,9 +776,7 @@ def test_protein_fit_is_capped(protein_g, target, expected):
         (30, 30, 0.0),
     ],
 )
-def test_time_fit_handles_zero_between_and_maximum(
-    prep_minutes, maximum, expected
-):
+def test_time_fit_handles_zero_between_and_maximum(prep_minutes, maximum, expected):
     _, breakdown = calculate_score(
         make_recipe(prep_minutes=prep_minutes),
         matched_count=0,
@@ -862,9 +862,7 @@ calculated. Construct each `ScoreComponent` as:
 ScoreComponent(
     value=round(full_precision_value, SCORE_DECIMALS),
     weight=weight,
-    contribution=round(
-        full_precision_value * weight, SCORE_DECIMALS
-    ),
+    contribution=round(full_precision_value * weight, SCORE_DECIMALS),
 )
 ```
 
@@ -872,9 +870,7 @@ Then calculate:
 
 ```python
 final_score = round(
-    pantry.contribution
-    + protein.contribution
-    + time.contribution,
+    pantry.contribution + protein.contribution + time.contribution,
     SCORE_DECIMALS,
 )
 ```
@@ -982,13 +978,10 @@ guard required by Global Constraints for the red run, then append:
         (20.0, 25.0, "is below"),
     ],
 )
-def test_explanation_uses_one_exact_template(
-    protein_g, target, phrase
-):
+def test_explanation_uses_one_exact_template(protein_g, target, phrase):
     recipe = make_recipe(protein_g=protein_g, prep_minutes=15)
     _, breakdown = calculate_score(
-        recipe, matched_count=2, min_protein_g=target,
-        max_prep_minutes=30
+        recipe, matched_count=2, min_protein_g=target, max_prep_minutes=30
     )
 
     explanation = render_explanation(
@@ -1126,20 +1119,21 @@ behavior:
 def test_rank_recipes_applies_exclusion_before_scoring():
     recipe = make_recipe()
 
-    assert rank_recipes(
-        make_request(
-            pantry_items=["spinach"],
-            excluded_ingredients=[" SPINACH "],
-        ),
-        [recipe],
-    ) == []
+    assert (
+        rank_recipes(
+            make_request(
+                pantry_items=["spinach"],
+                excluded_ingredients=[" SPINACH "],
+            ),
+            [recipe],
+        )
+        == []
+    )
 
 
 def test_rank_recipes_applies_time_filter_but_not_protein_as_hard_filter():
     too_slow = make_recipe(recipe_id="slow", protein_g=100.0, prep_minutes=31)
-    low_protein = make_recipe(
-        recipe_id="low-protein", protein_g=1.0, prep_minutes=30
-    )
+    low_protein = make_recipe(recipe_id="low-protein", protein_g=1.0, prep_minutes=30)
 
     results = rank_recipes(
         make_request(min_protein_g=50.0, max_prep_minutes=30),
@@ -1700,6 +1694,7 @@ git commit -m "feat: expose explainable meal ranking API"
 
 **Files:**
 
+- Modify: `docs/superpowers/plans/2026-07-25-explainable-meal-ranking.md`
 - Create: `docs/learning/001-explainable-meal-ranking.md`
 - Modify: `README.md`
 
@@ -1869,7 +1864,7 @@ agreement with the implemented code. After the review is clean, use the
 authorized task commit:
 
 ```powershell
-git add README.md docs/learning/001-explainable-meal-ranking.md
+git add README.md docs/learning/001-explainable-meal-ranking.md docs/superpowers/plans/2026-07-25-explainable-meal-ranking.md
 git commit -m "docs: explain deterministic meal ranking"
 ```
 
@@ -1976,6 +1971,8 @@ plan and task boundaries listed above.
   constraints that the plain Task 4 request model does not already enforce.
 - [x] Task 5 uses a non-raising client only for RED validation cases that would
   otherwise escape as domain exceptions, preserving explicit test failures.
+- [x] Task 6 includes the implementation plan in scope so Ruff can format its
+  Python fenced blocks and the exact repository-wide format check can pass.
 - [x] Every missing-module or missing-symbol red step is converted from a
   collection error into an explicit test failure before production code.
 - [x] The final verification is evidence-based and runs on Python 3.12 through
@@ -2001,6 +1998,8 @@ plan and task boundaries listed above.
 - The Task 5 correction is approved: `models.py` is explicit task scope,
   framework-backed acceptance tests precede route production, and genuinely
   missing validation constraints retain their own later failing tests.
+- The Task 6 correction is approved: the implementation plan is included in
+  the documentation boundary for mechanical Ruff formatting of Python fences.
 - `calories` is specified as a non-negative number rather than specifically an
   integer or float. The model preserves either JSON numeric form with
   `int | float`; scoring does not depend on calories.
