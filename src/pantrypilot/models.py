@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -12,10 +14,19 @@ from pantrypilot.normalization import normalize_ingredients
 
 class RankingRequest(BaseModel):
     pantry_items: list[str]
-    min_protein_g: float
-    max_prep_minutes: int
+    min_protein_g: Annotated[FiniteFloat, Field(ge=0, strict=True)]
+    max_prep_minutes: Annotated[StrictInt, Field(ge=0)]
     excluded_ingredients: list[str]
-    limit: int
+    limit: Annotated[StrictInt, Field(ge=1, le=50)]
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("pantry_items", "excluded_ingredients")
+    @classmethod
+    def reject_blank_ingredients(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("ingredient values must not be blank")
+        return values
 
 
 class Recipe(BaseModel):
@@ -72,3 +83,10 @@ class RankedRecipe(Recipe):
     missing_ingredients: tuple[str, ...]
     score_breakdown: ScoreBreakdown
     explanation: str
+
+
+class RankingResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    results: list[RankedRecipe]
+    returned_count: int = Field(ge=0)
