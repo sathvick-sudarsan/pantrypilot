@@ -38,3 +38,19 @@ class Recipe(BaseModel):
     @classmethod
     def normalize_required_ingredients(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return normalize_ingredients(values)
+
+
+class ScoreComponent(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    value: float
+    weight: float
+    contribution: float
+
+
+class ScoreBreakdown(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pantry_coverage: ScoreComponent
+    protein_fit: ScoreComponent
+    time_fit: ScoreComponent
