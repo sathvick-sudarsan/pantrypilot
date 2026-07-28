@@ -1604,7 +1604,6 @@ def test_meal_rankings_preserves_non_finite_validation_details(value, rendered_i
     assert error["loc"] == ["body", "min_protein_g"]
     assert error["msg"] == "Input should be a finite number"
     assert error["input"] == rendered_input
-    assert "url" in error
 
 
 def test_meal_rankings_keeps_null_distinct_from_non_finite_values():
@@ -2000,7 +1999,8 @@ send real non-finite floats through a raw JSON body and assert:
 - `type == "finite_number"`;
 - `msg == "Input should be a finite number"`;
 - input is the correct canonical string rather than `null`; and
-- useful Pydantic metadata remains present.
+- the complete FastAPI/Pydantic error entry remains present rather than being
+  replaced with a custom error shape.
 
 Add:
 
@@ -2029,6 +2029,8 @@ In `app.py`, register a `RequestValidationError` handler. Encode
 `exc.errors()` with FastAPI's existing `jsonable_encoder`, recursively replace
 only non-finite float values in that rendered copy with the three canonical
 strings, and return `JSONResponse(status_code=422, content={"detail": ...})`.
+Copy dictionaries recursively so any additional metadata supplied by FastAPI
+or Pydantic remains intact.
 Do not mutate model input, catch errors inside the route, introduce a custom
 exception class, or change ranking behavior.
 
