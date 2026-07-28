@@ -46,6 +46,9 @@ def test_load_catalog_rejects_duplicate_recipe_ids():
         ("protein_g", "20.0"),
         ("protein_g", True),
         ("prep_minutes", -1),
+        ("prep_minutes", True),
+        ("prep_minutes", 10.5),
+        ("prep_minutes", "10"),
     ],
 )
 def test_load_catalog_rejects_invalid_recipe_records(field, value):

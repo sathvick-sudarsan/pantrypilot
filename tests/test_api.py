@@ -78,6 +78,29 @@ def test_meal_rankings_returns_successful_empty_result():
     assert response.json() == {"results": [], "returned_count": 0}
 
 
+def test_meal_rankings_returns_all_eligible_results_in_deterministic_order():
+    response = client.post(
+        "/v1/meal-rankings",
+        json={
+            **VALID_REQUEST,
+            "excluded_ingredients": [],
+            "max_prep_minutes": 45,
+            "limit": 50,
+        },
+    )
+
+    response_body = response.json()
+    assert response.status_code == 200
+    assert [result["id"] for result in response_body["results"]] == [
+        "spinach-omelet",
+        "peanut-noodles",
+        "black-bean-tacos",
+        "lentil-soup",
+    ]
+    assert response_body["returned_count"] > 1
+    assert response_body["returned_count"] == len(response_body["results"])
+
+
 @pytest.mark.parametrize(
     "missing_field",
     [
@@ -123,7 +146,6 @@ def test_unexpected_error_returns_500_without_internal_details(monkeypatch):
         raise RuntimeError("private implementation detail")
 
     monkeypatch.setattr(app_module, "rank_recipes", fail_ranking)
-    safe_client = TestClient(app_module.app, raise_server_exceptions=False)
 
     response = safe_client.post("/v1/meal-rankings", json=VALID_REQUEST)
 
@@ -284,8 +306,12 @@ def test_meal_rankings_rejects_blank_ingredient_values(field, value):
         json={**VALID_REQUEST, field: value},
     )
 
+    error = response.json()["detail"][0]
     assert response.status_code == 422
-    assert field in response.text
+    assert error["loc"] == ["body", field]
+    assert error["type"] == "value_error"
+    assert error["msg"] == "Value error, ingredient values must not be blank"
+    assert error["input"] == value
 
 
 def test_meal_rankings_rejects_unknown_request_fields():
@@ -294,5 +320,11 @@ def test_meal_rankings_rejects_unknown_request_fields():
         json={**VALID_REQUEST, "ranking_model": "future"},
     )
 
+    error = response.json()["detail"][0]
     assert response.status_code == 422
-    assert "ranking_model" in response.text
+    assert error == {
+        "type": "extra_forbidden",
+        "loc": ["body", "ranking_model"],
+        "msg": "Extra inputs are not permitted",
+        "input": "future",
+    }

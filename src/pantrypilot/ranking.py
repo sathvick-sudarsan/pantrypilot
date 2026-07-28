@@ -55,6 +55,7 @@ def calculate_score(
     min_protein_g: float,
     max_prep_minutes: int,
 ) -> tuple[float, ScoreBreakdown]:
+    """Require an eligible recipe within ``max_prep_minutes``."""
     pantry = _score_component(
         matched_count / len(recipe.required_ingredients), PANTRY_WEIGHT
     )
@@ -85,6 +86,7 @@ def render_explanation(
     max_prep_minutes: int,
     score_breakdown: ScoreBreakdown,
 ) -> str:
+    """Require an eligible recipe within ``max_prep_minutes``."""
     protein_phrase = "meets" if recipe.protein_g >= min_protein_g else "is below"
     return (
         f"Matched {matched_count} of {len(recipe.required_ingredients)} required "
