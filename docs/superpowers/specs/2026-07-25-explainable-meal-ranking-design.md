@@ -191,6 +191,16 @@ A valid request with no eligible recipes returns status `200` with an empty
 Malformed JSON and schema violations return FastAPI's standard `422` response.
 Unexpected errors return `500` without internal implementation details.
 
+Python HTTP test clients can serialize non-finite floats as the non-standard
+numeric tokens `Infinity`, `-Infinity`, and `NaN`. Pydantic correctly rejects
+those values, but Starlette's default validation response cannot serialize the
+original non-finite input with strict JSON. The FastAPI layer therefore uses a
+narrow `RequestValidationError` handler that preserves the standard
+`{"detail": [...]}` shape and each Pydantic error's type, location, message,
+input, and useful metadata while rendering only non-finite floats as the
+deterministic strings `"Infinity"`, `"-Infinity"`, and `"NaN"`. The handler
+does not mutate request input before validation.
+
 ## Normalization and matching
 
 An ingredient is normalized by:
@@ -306,6 +316,8 @@ implementation does not generate alternative prose.
   internals.
 - The first feature does not add custom exception hierarchies because it has no
   recoverable domain errors beyond validation.
+- The FastAPI layer has one narrow request-validation response handler for
+  safely rendering non-finite values in otherwise standard `422` details.
 
 ## Testing strategy
 
@@ -334,10 +346,11 @@ implementation does not generate alternative prose.
 - A valid request with no eligible recipes
 - Missing required fields
 - Negative constraint values
-- Non-finite numeric input
+- Real non-finite numeric input with preserved Pydantic error details
 - Blank ingredient strings
 - Invalid limits
 - Unknown request fields
+- Non-finite values nested inside rejected unknown fields
 
 Tests should assert product behavior without copying framework implementation
 details into every test.

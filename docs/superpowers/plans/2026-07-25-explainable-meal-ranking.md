@@ -1315,6 +1315,8 @@ git commit -m "feat: add deterministic meal ranking pipeline"
 Create `tests/test_api.py`:
 
 ```python
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -1579,14 +1581,44 @@ def test_meal_rankings_rejects_wrong_numeric_types(field, value):
     assert field in response.text
 
 
-@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
-def test_meal_rankings_rejects_non_finite_protein_target(value):
-    request = {**VALID_REQUEST, "min_protein_g": value}
+# Post-review correction: Task 8 adds and executes this real-float regression
+# from the 04ae8ab baseline. It replaces the original Task 5 string cases.
+@pytest.mark.parametrize(
+    ("value", "rendered_input"),
+    [
+        (float("inf"), "Infinity"),
+        (float("-inf"), "-Infinity"),
+        (float("nan"), "NaN"),
+    ],
+)
+def test_meal_rankings_preserves_non_finite_validation_details(value, rendered_input):
+    response = safe_client.post(
+        "/v1/meal-rankings",
+        content=json.dumps({**VALID_REQUEST, "min_protein_g": value}),
+        headers={"content-type": "application/json"},
+    )
 
-    response = safe_client.post("/v1/meal-rankings", json=request)
-
+    error = response.json()["detail"][0]
     assert response.status_code == 422
-    assert "min_protein_g" in response.text
+    assert error["type"] == "finite_number"
+    assert error["loc"] == ["body", "min_protein_g"]
+    assert error["msg"] == "Input should be a finite number"
+    assert error["input"] == rendered_input
+    assert "url" in error
+
+
+def test_meal_rankings_keeps_null_distinct_from_non_finite_values():
+    response = safe_client.post(
+        "/v1/meal-rankings",
+        json={**VALID_REQUEST, "min_protein_g": None},
+    )
+
+    error = response.json()["detail"][0]
+    assert response.status_code == 422
+    assert error["type"] == "float_type"
+    assert error["loc"] == ["body", "min_protein_g"]
+    assert error["msg"] == "Input should be a valid number"
+    assert error["input"] is None
 
 
 @pytest.mark.parametrize(
@@ -1621,14 +1653,14 @@ Run each new rule immediately after adding it:
 ```powershell
 uv run pytest tests/test_api.py::test_meal_rankings_rejects_invalid_numeric_boundaries -v
 uv run pytest tests/test_api.py::test_meal_rankings_rejects_wrong_numeric_types -v
-uv run pytest tests/test_api.py::test_meal_rankings_rejects_non_finite_protein_target -v
 uv run pytest tests/test_api.py::test_meal_rankings_rejects_blank_ingredient_values -v
 uv run pytest tests/test_api.py::test_meal_rankings_rejects_unknown_request_fields -v
 ```
 
 Expected before final model constraints: every parameterized rule or named
-test reports `FAILED` with a `200` or safe generic `500`, never an uncaught
-exception or collection error.
+test executed in this historical task reports `FAILED` with a `200` or safe
+generic `500`, never an uncaught exception or collection error. Task 8 owns the
+later RED/GREEN cycle for the corrected real-float regression.
 
 - [ ] **Step 5: Implement and pass the exact request constraints**
 
@@ -1656,12 +1688,15 @@ def reject_blank_ingredients(cls, values: list[str]) -> list[str]:
 Run the focused validation group:
 
 ```powershell
-uv run pytest tests/test_api.py -k "rejects_invalid or rejects_wrong or rejects_non_finite or rejects_blank or rejects_unknown" -v
+uv run pytest tests/test_api.py `
+  -k "rejects_invalid or rejects_wrong or rejects_blank or rejects_unknown" -v
 ```
 
-Expected: PASS with FastAPI's standard field-level `422` responses. Do not add
-a custom exception hierarchy or handler; the earlier generic-500 acceptance
-test already proves the framework default does not leak internal details.
+Expected: the original request-constraint tests PASS with FastAPI's field-level
+`422` responses. Do not add a custom exception hierarchy or validation handler
+in this historical task. Task 8 installs the narrow app-layer
+`RequestValidationError` handler after first adding and observing the corrected
+real-float regression failures at the current `04ae8ab` baseline.
 
 - [ ] **Step 6: Run API, full-suite, and static checks**
 
@@ -1880,6 +1915,292 @@ merge into `main` without separate user direction.
 
 ---
 
+### Task 7: Record the Approved Validation-Transport Clarification
+
+**Files:**
+
+- Modify:
+  `docs/superpowers/specs/2026-07-25-explainable-meal-ranking-design.md`
+- Modify:
+  `docs/superpowers/plans/2026-07-25-explainable-meal-ranking.md`
+
+**Interfaces:**
+
+- Preserves Pydantic request validation as the source of validation errors.
+- Authorizes one narrow FastAPI `RequestValidationError` handler to render
+  non-finite values safely in the standard `{"detail": [...]}` response shape.
+- Does not authorize a custom exception hierarchy, request-input mutation, or
+  handling outside the HTTP transport boundary.
+- Tasks 8–10 are the project-owner-authorized follow-up implementation,
+  coverage, and documentation scope for this clarification.
+
+- [ ] **Step 1: Correct Task 5 and the approved design**
+
+Replace the Task 5 string cases with real `float("inf")`, `float("-inf")`,
+and `float("nan")` JSON request bodies. Require the tests to inspect
+Pydantic's `finite_number` type, `["body", "min_protein_g"]` location,
+finite-number message, truthful rendered input, and useful metadata. Add a
+separate real `null` assertion so it remains distinguishable.
+
+Record in the design that Python HTTP clients can emit non-standard
+non-finite numeric tokens, Pydantic rejects them correctly, and only the
+rendered validation payload needs sanitization.
+
+- [ ] **Step 2: Self-review and commit the clarification**
+
+Check the amendment for design coverage, missing requirements, vague steps,
+interface/type inconsistencies, scope creep, and contradictions with Tasks
+1–6. Then run:
+
+```powershell
+uv run ruff format --check `
+  docs/superpowers/specs/2026-07-25-explainable-meal-ranking-design.md `
+  docs/superpowers/plans/2026-07-25-explainable-meal-ranking.md
+uv run ruff check `
+  docs/superpowers/specs/2026-07-25-explainable-meal-ranking-design.md `
+  docs/superpowers/plans/2026-07-25-explainable-meal-ranking.md
+git diff --check
+```
+
+After independent review is clean:
+
+```powershell
+git add `
+  docs/superpowers/specs/2026-07-25-explainable-meal-ranking-design.md `
+  docs/superpowers/plans/2026-07-25-explainable-meal-ranking.md
+git commit -m "docs: clarify validation error transport handling"
+```
+
+---
+
+### Task 8: Preserve Non-Finite Pydantic Validation Details
+
+**Files:**
+
+- Modify: `tests/test_api.py`
+- Modify: `src/pantrypilot/models.py`
+- Modify: `src/pantrypilot/app.py`
+
+**Interfaces:**
+
+- `RankingRequest` receives the original parsed input and remains responsible
+  only for schema validation.
+- The FastAPI application handles `RequestValidationError` and returns status
+  `422` with `{"detail": [...]}`.
+- Only non-finite floats in the rendered error payload become the strings
+  `"Infinity"`, `"-Infinity"`, or `"NaN"`.
+
+- [ ] **Step 1: Write focused regression tests before production changes**
+
+Strengthen `test_meal_rankings_preserves_non_finite_validation_details` to
+send real non-finite floats through a raw JSON body and assert:
+
+- status `422`;
+- `loc == ["body", "min_protein_g"]`;
+- `type == "finite_number"`;
+- `msg == "Input should be a finite number"`;
+- input is the correct canonical string rather than `null`; and
+- useful Pydantic metadata remains present.
+
+Add:
+
+- `test_meal_rankings_keeps_null_distinct_from_non_finite_values`, asserting
+  actual `null` retains Pydantic's `float_type`, valid-number message, and
+  `input is None`; and
+- `test_unknown_field_with_nested_non_finite_values_returns_serializable_422`,
+  asserting `extra_forbidden`, location, message, and a nested input containing
+  canonical `"Infinity"`, `"-Infinity"`, and `"NaN"` values.
+
+Run:
+
+```powershell
+uv run pytest tests/test_api.py `
+  -k "preserves_non_finite or keeps_null_distinct or nested_non_finite" -v
+```
+
+Expected RED at `04ae8ab`: the recursive request-model sanitizer changes
+non-finite input to `null`, so the tests observe inaccurate types and inputs.
+
+- [ ] **Step 2: Implement the smallest transport-boundary fix**
+
+Remove `replace_non_finite_values` and its imports from `RankingRequest`.
+
+In `app.py`, register a `RequestValidationError` handler. Encode
+`exc.errors()` with FastAPI's existing `jsonable_encoder`, recursively replace
+only non-finite float values in that rendered copy with the three canonical
+strings, and return `JSONResponse(status_code=422, content={"detail": ...})`.
+Do not mutate model input, catch errors inside the route, introduce a custom
+exception class, or change ranking behavior.
+
+- [ ] **Step 3: Prove GREEN and broaden the API check**
+
+Run:
+
+```powershell
+uv run pytest tests/test_api.py `
+  -k "preserves_non_finite or keeps_null_distinct or nested_non_finite" -v
+uv run pytest tests/test_api.py -v
+git diff --check
+```
+
+Expected: every focused regression and all API tests PASS.
+
+- [ ] **Step 4: Review and commit the fix**
+
+Request independent specification and quality review of the task diff, with
+special attention to accurate Pydantic detail preservation, JSON safety,
+input immutability, standard response compatibility, and transport-only scope.
+After review is clean:
+
+```powershell
+git add src/pantrypilot/app.py src/pantrypilot/models.py tests/test_api.py
+git commit -m "fix: preserve non-finite validation details"
+```
+
+---
+
+### Task 9: Strengthen API and Catalog Contracts
+
+**Files:**
+
+- Modify: `tests/test_api.py`
+- Modify: `tests/test_catalog.py`
+- Modify: `src/pantrypilot/ranking.py`
+
+**Interfaces:**
+
+- Existing request and catalog schemas do not change.
+- The API's returned count and deterministic ordering receive broader
+  committed coverage.
+- `calculate_score` and `render_explanation` document their existing
+  eligible-recipe precondition.
+
+- [ ] **Step 1: Strengthen structured validation assertions**
+
+Update blank-ingredient and unknown-field tests to inspect `loc`, `type`,
+`msg`, and `input` where relevant rather than merely searching response text.
+Remove the redundant local `safe_client` rebinding from the generic `500`
+test.
+
+- [ ] **Step 2: Add multi-result API coverage**
+
+Add a request with no exclusions, a 45-minute maximum, and limit `50`. Assert
+the complete ordered ID list:
+
+```python
+[
+    "spinach-omelet",
+    "peanut-noodles",
+    "black-bean-tacos",
+    "lentil-soup",
+]
+```
+
+Also assert `returned_count > 1` and
+`returned_count == len(response_body["results"])`.
+
+- [ ] **Step 3: Add strict catalog integer coverage**
+
+Extend the invalid recipe cases with `prep_minutes` values `True`, `10.5`,
+and `"10"`. These are contract-regression tests for the existing `StrictInt`
+schema and should pass without production validation changes.
+
+- [ ] **Step 4: Document scoring/explanation preconditions**
+
+Add concise docstrings stating that `calculate_score` and
+`render_explanation` require an eligible recipe whose preparation time is
+within `max_prep_minutes`. Do not add defensive domain checks or alter
+behavior.
+
+- [ ] **Step 5: Verify, review, and commit the coverage boundary**
+
+Run:
+
+```powershell
+uv run pytest tests/test_api.py -v
+uv run pytest tests/test_catalog.py -v
+uv run pytest tests/test_ranking.py -v
+git diff --check
+```
+
+After independent specification and quality review is clean:
+
+```powershell
+git add src/pantrypilot/ranking.py tests/test_api.py tests/test_catalog.py
+git commit -m "test: strengthen ranking contracts"
+```
+
+---
+
+### Task 10: Explain the Transport and Reverify the Branch
+
+**Files:**
+
+- Modify: `docs/learning/001-explainable-meal-ranking.md`
+
+**Interfaces:**
+
+- Documents the implemented transport behavior and existing rounding
+  semantics without adding product behavior.
+
+- [ ] **Step 1: Update the learning guide**
+
+Explain:
+
+- Python clients may send non-finite float tokens that Pydantic rejects but
+  Starlette's strict JSON validation-response serialization cannot render;
+- serialization safety belongs at the HTTP boundary because the request model
+  must validate the original input and the domain has no transport concerns;
+- the handler preserves Pydantic type, location, message, input, and useful
+  metadata while canonicalizing only non-finite rendered values; and
+- displayed component `value × weight` can differ from displayed
+  `contribution` by one four-decimal unit because contributions use the
+  full-precision value, while `final_score` remains exactly reconstructable
+  from returned contributions.
+
+- [ ] **Step 2: Run complete verification**
+
+Invoke `superpowers:verification-before-completion`, then run:
+
+```powershell
+uv --version
+uv python find 3.12
+uv lock --check
+uv sync --locked --python 3.12
+uv run python --version
+uv run pytest tests/test_catalog.py -v
+uv run pytest tests/test_normalization.py -v
+uv run pytest tests/test_ranking.py -v
+uv run pytest tests/test_api.py -v
+uv run pytest -v
+uv run ruff format .
+uv run ruff format --check .
+uv run ruff check .
+git diff --check
+```
+
+Expected: Python 3.12, a current lockfile, all tests passing, no Ruff or
+whitespace errors, and no generated files.
+
+- [ ] **Step 3: Review and commit the learning update**
+
+Request independent review for technical accuracy and consistency with the
+design and implementation. After review is clean:
+
+```powershell
+git add docs/learning/001-explainable-meal-ranking.md
+git commit -m "docs: explain validation error transport"
+```
+
+- [ ] **Step 4: Request fresh whole-branch reviews**
+
+Request separate read-only specification-compliance and code-quality reviews
+of the full branch diff. Address confirmed load-bearing findings with focused
+tests and separately reviewed conventional commits. Do not push, open a pull
+request, merge, or delete the worktree.
+
+---
+
 ## Planned Commit Boundaries
 
 | Boundary | Deliverable | Conventional commit |
@@ -1891,6 +2212,10 @@ merge into `main` without separate user direction.
 | 4 | Pure end-to-end ranking, deterministic ordering, post-sort limit | `feat: add deterministic meal ranking pipeline` |
 | 5 | Versioned FastAPI route and complete HTTP validation/error contract | `feat: expose explainable meal ranking API` |
 | 6 | Learning guide, mock-interview guidance, exercises, README quick start | `docs: explain deterministic meal ranking` |
+| 7 | Approved non-finite validation transport clarification | `docs: clarify validation error transport handling` |
+| 8 | Accurate, JSON-safe non-finite Pydantic validation details | `fix: preserve non-finite validation details` |
+| 9 | Structured validation, multi-result ordering, and strict catalog coverage | `test: strengthen ranking contracts` |
+| 10 | Transport/rounding learning update and final verification | `docs: explain validation error transport` |
 
 Review findings that require code changes stay inside the uncommitted task
 diff, receive focused tests and scoped re-review, and are included in the
@@ -1922,14 +2247,18 @@ plan and task boundaries listed above.
 | Missing required fields | parameterized API test for all five fields |
 | Negative constraints | parameterized API boundary test |
 | Numeric schema types | parameterized API test for strings, fractional integers, and booleans |
-| Non-finite number | parameterized API test for NaN and infinities |
-| Blank ingredients | parameterized API test for pantry and exclusions |
+| Non-finite number | real-float API tests for NaN and both infinities with exact `loc`, `type`, `msg`, and canonical rendered `input` |
+| Non-finite versus null | API test preserving Pydantic's distinct `float_type` and `input: null` |
+| Nested non-finite unknown input | API `extra_forbidden` test with a serializable, truthfully rendered nested input |
+| Blank ingredients | parameterized API test for pantry and exclusions with structured detail assertions |
 | Limits outside 1–50 | API tests for 0 and 51 |
-| Unknown request fields | API extra-field test |
+| Unknown request fields | API extra-field tests with structured detail assertions |
 | Malformed JSON | API malformed-body test |
 | Generic unexpected 500 | monkeypatched API test with secret non-disclosure assertion |
 | Invalid catalog stops startup/import | loader validation tests plus module-level `CATALOG = load_catalog(...)` |
+| Strict catalog preparation time | loader tests reject boolean, fractional-float, and numeric-string values |
 | Repeated identical request behavior | direct ranking equality test and repeated-request HTTP equality test |
+| Complete multi-result HTTP order/count | known-catalog API test asserts all four ordered IDs and count consistency |
 | Final scores remain in `[0, 1]` | reconstructability test assertion |
 | Ranking works without an HTTP server | all `test_ranking.py` calls target pure functions directly |
 
@@ -1950,7 +2279,8 @@ plan and task boundaries listed above.
   rule.
 - [x] The plan introduces no approved non-goal, Mypy configuration, GitHub
   Actions workflow, custom cache, repository, service layer, exception
-  hierarchy, or extra dependency.
+  hierarchy, or extra dependency. Its one validation handler is confined to
+  the explicitly approved HTTP serialization problem.
 - [x] Every production task has focused red/green commands, a broader test run,
   independent review, and a planned conventional-commit boundary.
 - [x] Dedicated normalization tests are created and observed failing in Task 1
@@ -1971,8 +2301,16 @@ plan and task boundaries listed above.
   constraints that the plain Task 4 request model does not already enforce.
 - [x] Task 5 uses a non-raising client only for RED validation cases that would
   otherwise escape as domain exceptions, preserving explicit test failures.
+- [x] Task 5 now sends real non-finite numeric values rather than numeric
+  strings and inspects structured Pydantic details.
 - [x] Task 6 includes the implementation plan in scope so Ruff can format its
   Python fenced blocks and the exact repository-wide format check can pass.
+- [x] Tasks 7–10 remove the inaccurate request-model sanitizer, preserve the
+  original validation input, constrain sanitization to rendered HTTP error
+  details, and cover null distinction plus nested unknown inputs.
+- [x] The post-review work adds only requested regression coverage,
+  precondition docstrings, and learning material; it does not trim catalog
+  text or impose speculative list-length limits.
 - [x] Every missing-module or missing-symbol red step is converted from a
   collection error into an explicit test failure before production code.
 - [x] The final verification is evidence-based and runs on Python 3.12 through
@@ -2000,6 +2338,14 @@ plan and task boundaries listed above.
   missing validation constraints retain their own later failing tests.
 - The Task 6 correction is approved: the implementation plan is included in
   the documentation boundary for mechanical Ruff formatting of Python fences.
+- The post-review clarification is approved: the previous prohibition on a
+  custom validation handler is superseded only for safely serializing
+  non-finite values in FastAPI `RequestValidationError` details. The request
+  model must receive the original input, and no custom exception hierarchy is
+  authorized.
+- Trimming recipe IDs or names is not approved; the existing non-blank
+  validation remains unchanged.
+- Arbitrary maximum lengths for pantry and exclusion lists are not approved.
 - `calories` is specified as a non-negative number rather than specifically an
   integer or float. The model preserves either JSON numeric form with
   `int | float`; scoring does not depend on calories.
