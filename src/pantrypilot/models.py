@@ -1,4 +1,3 @@
-from math import isfinite
 from typing import Annotated
 
 from pydantic import (
@@ -8,7 +7,6 @@ from pydantic import (
     FiniteFloat,
     StrictInt,
     field_validator,
-    model_validator,
 )
 
 from pantrypilot.normalization import normalize_ingredients
@@ -22,19 +20,6 @@ class RankingRequest(BaseModel):
     limit: Annotated[StrictInt, Field(ge=1, le=50)]
 
     model_config = ConfigDict(extra="forbid")
-
-    @model_validator(mode="before")
-    @classmethod
-    def replace_non_finite_values(cls, value: object) -> object:
-        if isinstance(value, float) and not isfinite(value):
-            return None
-        if isinstance(value, dict):
-            return {
-                key: cls.replace_non_finite_values(item) for key, item in value.items()
-            }
-        if isinstance(value, list):
-            return [cls.replace_non_finite_values(item) for item in value]
-        return value
 
     @field_validator("pantry_items", "excluded_ingredients")
     @classmethod

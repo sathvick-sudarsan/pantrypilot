@@ -177,16 +177,75 @@ def test_meal_rankings_rejects_wrong_numeric_types(field, value):
     assert field in response.text
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
-def test_meal_rankings_rejects_non_finite_protein_target(value):
+@pytest.mark.parametrize(
+    ("value", "rendered_input"),
+    [
+        (float("inf"), "Infinity"),
+        (float("-inf"), "-Infinity"),
+        (float("nan"), "NaN"),
+    ],
+)
+def test_meal_rankings_preserves_non_finite_validation_details(value, rendered_input):
     response = safe_client.post(
         "/v1/meal-rankings",
         content=json.dumps({**VALID_REQUEST, "min_protein_g": value}),
         headers={"content-type": "application/json"},
     )
 
+    error = response.json()["detail"][0]
     assert response.status_code == 422
-    assert "min_protein_g" in response.text
+    assert error == {
+        "type": "finite_number",
+        "loc": ["body", "min_protein_g"],
+        "msg": "Input should be a finite number",
+        "input": rendered_input,
+    }
+
+
+def test_meal_rankings_keeps_null_distinct_from_non_finite_values():
+    response = safe_client.post(
+        "/v1/meal-rankings",
+        json={**VALID_REQUEST, "min_protein_g": None},
+    )
+
+    error = response.json()["detail"][0]
+    assert response.status_code == 422
+    assert error == {
+        "type": "float_type",
+        "loc": ["body", "min_protein_g"],
+        "msg": "Input should be a valid number",
+        "input": None,
+    }
+
+
+def test_unknown_field_with_nested_non_finite_values_returns_serializable_422():
+    response = safe_client.post(
+        "/v1/meal-rankings",
+        content=json.dumps(
+            {
+                **VALID_REQUEST,
+                "ranking_options": {
+                    "positive": float("inf"),
+                    "negative": float("-inf"),
+                    "not_a_number": float("nan"),
+                },
+            }
+        ),
+        headers={"content-type": "application/json"},
+    )
+
+    error = response.json()["detail"][0]
+    assert response.status_code == 422
+    assert error == {
+        "type": "extra_forbidden",
+        "loc": ["body", "ranking_options"],
+        "msg": "Extra inputs are not permitted",
+        "input": {
+            "positive": "Infinity",
+            "negative": "-Infinity",
+            "not_a_number": "NaN",
+        },
+    }
 
 
 @pytest.mark.parametrize(
