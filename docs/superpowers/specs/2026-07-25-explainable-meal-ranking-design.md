@@ -6,6 +6,10 @@ Design date: 2026-07-25
 
 Approved: 2026-07-26
 
+Amended: 2026-07-27
+
+Amendment reason: Validation-transport and score-rounding clarification.
+
 ## Summary
 
 Feature 001 provides PantryPilot's first end-to-end product capability: a user
@@ -266,8 +270,12 @@ The final score is:
 Component values are calculated at full precision. Each weighted contribution
 is then rounded to four decimal places, and the final score is the four-decimal
 sum of those returned contributions. Component values are also exposed to four
-decimal places. This makes the returned final score exactly reconstructable
-from its breakdown. Final scores fall within `[0, 1]`.
+decimal places. The returned `final_score` is exactly reconstructable by
+summing the returned weighted contributions. Because a contribution is
+calculated from the full-precision component value before both are
+independently rounded, multiplying a displayed component value by its displayed
+weight may differ from the displayed contribution by `0.0001`. Final scores
+fall within `[0, 1]`.
 
 ## Ordering and limiting
 

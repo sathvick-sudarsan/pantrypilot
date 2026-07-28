@@ -2215,6 +2215,7 @@ request, merge, or delete the worktree.
 | 5 | Versioned FastAPI route and complete HTTP validation/error contract | `feat: expose explainable meal ranking API` |
 | 6 | Learning guide, mock-interview guidance, exercises, README quick start | `docs: explain deterministic meal ranking` |
 | 7 | Approved non-finite validation transport clarification | `docs: clarify validation error transport handling` |
+| 7a | Validation-error metadata expectation corrected to match FastAPI's actual error shape | `66dcf47 docs: correct validation error metadata expectation` |
 | 8 | Accurate, JSON-safe non-finite Pydantic validation details | `fix: preserve non-finite validation details` |
 | 9 | Structured validation, multi-result ordering, and strict catalog coverage | `test: strengthen ranking contracts` |
 | 10 | Transport/rounding learning update and final verification | `docs: explain validation error transport` |
