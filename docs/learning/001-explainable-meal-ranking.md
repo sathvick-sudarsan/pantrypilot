@@ -78,12 +78,35 @@ decimals, then sets `final_score` to the four-decimal sum of those returned
 contributions. A zero-minute maximum admits only zero-minute recipes through
 the hard filter, making its `time_fit = 1.0` branch well-defined.
 
+Consequently, multiplying a displayed component value by its displayed weight
+can differ by one `0.0001` unit from its displayed contribution. For example,
+the displayed coverage `0.2222` times `0.70` is `0.1555`, while rounding the
+full-precision `(2 / 9) * 0.70` produces the returned contribution `0.1556`.
+The returned `final_score` is still exactly reconstructable from the returned
+contributions.
+
 For Spinach Omelet with pantry `eggs` and `spinach`, a 25.0g protein target,
 and a 30-minute maximum: coverage is `2 / 3 = 0.6667` and contributes
 `round((2 / 3) * 0.70, 4) = 0.4667`; protein fit is `min(28 / 25, 1) = 1.0000`
 and contributes `0.2000`; time fit is `1 - 15 / 30 = 0.5000` and contributes
 `0.0500`. The returned final score is exactly reconstructable as
 `0.4667 + 0.2000 + 0.0500 = 0.7167`.
+
+## Validation error transport
+
+Strict JSON does not permit `Infinity`, `-Infinity`, or `NaN`, but Python's
+`json` encoder and HTTP test clients may emit those non-standard numeric
+tokens. Pydantic validates the original request and rejects non-finite values;
+the request handler does not accept or sanitize them before validation.
+Without a narrow handler, Starlette's strict JSON response serialization then
+cannot render Pydantic's non-finite error `input` value.
+
+That serialization safety belongs at the HTTP boundary: the request model must
+retain the original input for validation, and the pure domain has no transport
+concerns. The validation-error handler first applies `jsonable_encoder`, then
+canonicalizes only rendered non-finite floats as `"Infinity"`, `"-Infinity"`,
+or `"NaN"`. It preserves the standard `detail` structure and each Pydantic
+error's type, location, message, input, and useful metadata.
 
 ## Deterministic ordering
 
