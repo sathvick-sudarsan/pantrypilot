@@ -1,0 +1,53 @@
+from collections.abc import Iterable, Mapping
+
+from pantrypilot.models import Recipe
+
+
+def load_catalog(records: Iterable[Mapping[str, object]]) -> tuple[Recipe, ...]:
+    catalog: list[Recipe] = []
+    recipe_ids: set[str] = set()
+    for record in records:
+        recipe = Recipe.model_validate(record)
+        if recipe.id in recipe_ids:
+            raise ValueError(f"duplicate recipe id: {recipe.id}")
+        recipe_ids.add(recipe.id)
+        catalog.append(recipe)
+    return tuple(catalog)
+
+
+RAW_CATALOG = (
+    {
+        "id": "spinach-omelet",
+        "name": "Spinach Omelet",
+        "required_ingredients": ["eggs", "spinach", "olive oil"],
+        "calories": 410,
+        "protein_g": 28.0,
+        "prep_minutes": 15,
+    },
+    {
+        "id": "black-bean-tacos",
+        "name": "Black Bean Tacos",
+        "required_ingredients": ["black beans", "corn tortillas", "avocado", "lime"],
+        "calories": 520,
+        "protein_g": 19.0,
+        "prep_minutes": 25,
+    },
+    {
+        "id": "peanut-noodles",
+        "name": "Peanut Noodles",
+        "required_ingredients": ["noodles", "peanuts", "soy sauce"],
+        "calories": 560,
+        "protein_g": 20.0,
+        "prep_minutes": 20,
+    },
+    {
+        "id": "lentil-soup",
+        "name": "Lentil Soup",
+        "required_ingredients": ["lentils", "carrots", "celery", "vegetable broth"],
+        "calories": 360,
+        "protein_g": 22.0,
+        "prep_minutes": 45,
+    },
+)
+
+CATALOG = load_catalog(RAW_CATALOG)
