@@ -2,8 +2,11 @@ from decimal import Decimal
 
 import pytest
 
+from pantrypilot.catalog import CATALOG
+from pantrypilot.ingredients import INGREDIENT_REGISTRY
 from pantrypilot.models import RankingRequest, Recipe
 from pantrypilot.ranking import (
+    UnresolvedExcludedIngredientsError,
     calculate_score,
     is_eligible,
     match_ingredients,
@@ -15,14 +18,14 @@ from pantrypilot.ranking import (
 def make_recipe(
     *,
     recipe_id: str = "recipe",
-    required: tuple[str, ...] = ("eggs", "spinach", "olive oil"),
+    required: tuple[str, ...] = ("eggs", "spinach", "olive-oil"),
     protein_g: float = 20.0,
     prep_minutes: int = 10,
 ) -> Recipe:
     return Recipe(
         id=recipe_id,
         name=recipe_id.replace("-", " ").title(),
-        required_ingredients=required,
+        required_ingredient_ids=required,
         calories=300,
         protein_g=protein_g,
         prep_minutes=prep_minutes,
@@ -49,23 +52,31 @@ def make_request(
 
 
 def test_empty_pantry_marks_every_required_ingredient_missing():
-    matched, missing = match_ingredients(make_recipe(), set())
+    matched, missing = match_ingredients(make_recipe(), set(), INGREDIENT_REGISTRY)
 
     assert matched == ()
     assert missing == ("eggs", "spinach", "olive oil")
 
 
-def test_matching_is_exact_not_substring_plural_or_synonym_based():
-    recipe = make_recipe(required=("tomatoes", "olive oil", "garbanzo beans"))
+def test_matching_uses_only_resolved_canonical_ids():
+    recipe = make_recipe(required=("olive-oil", "black-beans"))
 
-    matched, missing = match_ingredients(recipe, {"tomato", "oil", "chickpeas"})
+    matched, missing = match_ingredients(
+        recipe,
+        {"oil", "beans"},
+        INGREDIENT_REGISTRY,
+    )
 
     assert matched == ()
-    assert missing == recipe.required_ingredients
+    assert missing == ("olive oil", "black beans")
 
 
-def test_matching_preserves_normalized_recipe_order():
-    matched, missing = match_ingredients(make_recipe(), {"spinach", "eggs"})
+def test_matching_compares_ids_and_returns_canonical_names_in_recipe_order():
+    matched, missing = match_ingredients(
+        make_recipe(),
+        {"spinach", "eggs"},
+        INGREDIENT_REGISTRY,
+    )
 
     assert matched == ("eggs", "spinach")
     assert missing == ("olive oil",)
@@ -77,7 +88,7 @@ def test_excluded_ingredient_makes_recipe_ineligible():
 
 def test_exclusion_takes_precedence_over_pantry_presence():
     recipe = make_recipe()
-    matched, _ = match_ingredients(recipe, {"spinach"})
+    matched, _ = match_ingredients(recipe, {"spinach"}, INGREDIENT_REGISTRY)
 
     assert matched == ("spinach",)
     assert not is_eligible(recipe, {"spinach"}, 30)
@@ -233,20 +244,109 @@ def test_explanation_uses_one_exact_template(protein_g, target, phrase):
     )
 
 
+def test_rank_recipes_resolves_aliases_and_unknown_pantry_terms_before_matching():
+    request = make_request(
+        pantry_items=[
+            "black bean",
+            "corn tortillas",
+            "avocado",
+            "lime",
+            "mystery ingredient",
+            "black beans",
+        ],
+        min_protein_g=0.0,
+        max_prep_minutes=30,
+        excluded_ingredients=["peanut"],
+        limit=50,
+    )
+
+    response = rank_recipes(request, CATALOG, INGREDIENT_REGISTRY)
+    tacos = next(
+        result for result in response.results if result.id == "black-bean-tacos"
+    )
+
+    assert [result.id for result in response.results] == [
+        "black-bean-tacos",
+        "spinach-omelet",
+    ]
+    assert tacos.matched_ingredients == (
+        "black beans",
+        "corn tortillas",
+        "avocado",
+        "lime",
+    )
+    assert tacos.missing_ingredients == ()
+    assert tacos.score_breakdown.pantry_coverage.value == 1.0
+    assert tacos.score_breakdown.pantry_coverage.contribution == 0.7
+    assert tacos.final_score == 0.9167
+    assert [
+        item.match_type for item in response.ingredient_resolution.pantry_items
+    ] == [
+        "alias",
+        "canonical",
+        "canonical",
+        "canonical",
+        "unresolved",
+        "canonical",
+    ]
+    assert response.ingredient_resolution.excluded_ingredients[0].ingredient_id == (
+        "peanuts"
+    )
+
+
+def test_black_bean_taco_exact_match_baseline_score_remains_reconstructable():
+    tacos = next(recipe for recipe in CATALOG if recipe.id == "black-bean-tacos")
+
+    final_score, breakdown = calculate_score(
+        tacos,
+        matched_count=3,
+        min_protein_g=0.0,
+        max_prep_minutes=30,
+    )
+
+    assert breakdown.pantry_coverage.value == 0.75
+    assert breakdown.pantry_coverage.contribution == 0.525
+    assert breakdown.protein_fit.contribution == 0.2
+    assert breakdown.time_fit.contribution == 0.0167
+    assert final_score == 0.7417
+
+
+def test_rank_recipes_rejects_unresolved_exclusions_with_complete_evidence():
+    request = make_request(
+        pantry_items=["black bean"],
+        excluded_ingredients=["groundnut"],
+    )
+
+    with pytest.raises(UnresolvedExcludedIngredientsError) as exc_info:
+        rank_recipes(request, CATALOG, INGREDIENT_REGISTRY)
+
+    evidence = exc_info.value.ingredient_resolution
+    assert evidence.pantry_items[0].ingredient_id == "black-beans"
+    assert evidence.excluded_ingredients[0].model_dump() == {
+        "input": "groundnut",
+        "normalized": "groundnut",
+        "ingredient_id": None,
+        "canonical_name": None,
+        "match_type": "unresolved",
+    }
+
+
 def test_rank_recipes_normalizes_request_and_builds_stable_result_fields():
     recipe = make_recipe()
 
-    result = rank_recipes(
+    response = rank_recipes(
         make_request(
             pantry_items=[" Spinach ", "EGGS", "spinach"],
             excluded_ingredients=[],
         ),
         [recipe],
-    )[0]
+        INGREDIENT_REGISTRY,
+    )
+    result = response.results[0]
 
     assert result.matched_ingredients == ("eggs", "spinach")
     assert result.missing_ingredients == ("olive oil",)
-    assert result.required_ingredients == recipe.required_ingredients
+    assert result.required_ingredients == ("eggs", "spinach", "olive oil")
     assert result.score_breakdown.pantry_coverage.value == 0.6667
     assert result.explanation.startswith("Matched 2 of 3")
 
@@ -261,7 +361,8 @@ def test_rank_recipes_applies_exclusion_before_scoring():
                 excluded_ingredients=[" SPINACH "],
             ),
             [recipe],
-        )
+            INGREDIENT_REGISTRY,
+        ).results
         == []
     )
 
@@ -270,17 +371,24 @@ def test_rank_recipes_applies_time_filter_but_not_protein_as_hard_filter():
     too_slow = make_recipe(recipe_id="slow", protein_g=100.0, prep_minutes=31)
     low_protein = make_recipe(recipe_id="low-protein", protein_g=1.0, prep_minutes=30)
 
-    results = rank_recipes(
+    response = rank_recipes(
         make_request(min_protein_g=50.0, max_prep_minutes=30),
         [too_slow, low_protein],
+        INGREDIENT_REGISTRY,
     )
+    results = response.results
 
     assert [result.id for result in results] == ["low-protein"]
     assert results[0].score_breakdown.protein_fit.value == 0.02
 
 
 def test_rank_recipes_with_empty_pantry_returns_zero_coverage_results():
-    result = rank_recipes(make_request(pantry_items=[]), [make_recipe()])[0]
+    response = rank_recipes(
+        make_request(pantry_items=[]),
+        [make_recipe()],
+        INGREDIENT_REGISTRY,
+    )
+    result = response.results[0]
 
     assert result.matched_ingredients == ()
     assert result.missing_ingredients == ("eggs", "spinach", "olive oil")
@@ -291,7 +399,9 @@ def test_repeated_identical_rankings_are_equal():
     request = make_request(pantry_items=["eggs"])
     recipes = [make_recipe(recipe_id="b"), make_recipe(recipe_id="a")]
 
-    assert rank_recipes(request, recipes) == rank_recipes(request, recipes)
+    assert rank_recipes(request, recipes, INGREDIENT_REGISTRY) == rank_recipes(
+        request, recipes, INGREDIENT_REGISTRY
+    )
 
 
 def test_equal_exposed_scores_tie_break_by_recipe_id():
@@ -300,10 +410,12 @@ def test_equal_exposed_scores_tie_break_by_recipe_id():
         make_recipe(recipe_id="a-recipe", protein_g=10.001),
     ]
 
-    results = rank_recipes(
+    response = rank_recipes(
         make_request(min_protein_g=20.0),
         recipes,
+        INGREDIENT_REGISTRY,
     )
+    results = response.results
 
     assert results[0].final_score == results[1].final_score
     assert [result.id for result in results] == ["a-recipe", "z-recipe"]
@@ -311,13 +423,15 @@ def test_equal_exposed_scores_tie_break_by_recipe_id():
 
 def test_limit_is_applied_after_sorting():
     recipes = [
-        make_recipe(recipe_id="low", required=("missing",), protein_g=0.0),
+        make_recipe(recipe_id="low", required=("celery",), protein_g=0.0),
         make_recipe(recipe_id="high", required=("eggs",), protein_g=20.0),
     ]
 
-    results = rank_recipes(
+    response = rank_recipes(
         make_request(pantry_items=["eggs"], limit=1),
         recipes,
+        INGREDIENT_REGISTRY,
     )
+    results = response.results
 
     assert [result.id for result in results] == ["high"]

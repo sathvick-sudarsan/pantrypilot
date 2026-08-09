@@ -74,6 +74,13 @@ class IngredientResolution(BaseModel):
         return self
 
 
+class IngredientResolutionEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pantry_items: tuple[IngredientResolution, ...]
+    excluded_ingredients: tuple[IngredientResolution, ...]
+
+
 def load_ingredient_registry(
     records: Iterable[Mapping[str, object]],
 ) -> IngredientRegistry:
