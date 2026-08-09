@@ -2,8 +2,12 @@ import pytest
 from pydantic import ValidationError
 
 from pantrypilot.ingredients import (
+    INGREDIENT_REGISTRY,
     CanonicalIngredient,
+    IngredientResolution,
     load_ingredient_registry,
+    resolve_ingredient,
+    resolve_ingredients,
 )
 
 VALID_INGREDIENTS = (
@@ -18,6 +22,123 @@ VALID_INGREDIENTS = (
         "aliases": ["vegetable stock"],
     },
 )
+
+
+def test_resolve_ingredient_returns_canonical_evidence_after_normalization():
+    registry = load_ingredient_registry(VALID_INGREDIENTS)
+
+    resolution = resolve_ingredient(" BLACK BEANS ", registry)
+
+    assert resolution.model_dump() == {
+        "input": " BLACK BEANS ",
+        "normalized": "black beans",
+        "ingredient_id": "black-beans",
+        "canonical_name": "black beans",
+        "match_type": "canonical",
+    }
+
+
+def test_resolve_ingredient_returns_explicit_alias_evidence():
+    registry = load_ingredient_registry(VALID_INGREDIENTS)
+
+    resolution = resolve_ingredient("Black Bean", registry)
+
+    assert resolution.model_dump() == {
+        "input": "Black Bean",
+        "normalized": "black bean",
+        "ingredient_id": "black-beans",
+        "canonical_name": "black beans",
+        "match_type": "alias",
+    }
+
+
+def test_resolve_ingredient_abstains_on_unsupported_text():
+    registry = load_ingredient_registry(VALID_INGREDIENTS)
+
+    resolution = resolve_ingredient("black bean sauce", registry)
+
+    assert resolution.model_dump() == {
+        "input": "black bean sauce",
+        "normalized": "black bean sauce",
+        "ingredient_id": None,
+        "canonical_name": None,
+        "match_type": "unresolved",
+    }
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {
+            "ingredient_id": "black-beans",
+            "canonical_name": "black beans",
+            "match_type": "unresolved",
+        },
+        {
+            "ingredient_id": None,
+            "canonical_name": None,
+            "match_type": "alias",
+        },
+    ],
+)
+def test_ingredient_resolution_rejects_contradictory_states(fields):
+    with pytest.raises(ValidationError):
+        IngredientResolution(
+            input="black bean",
+            normalized="black bean",
+            **fields,
+        )
+
+
+def test_resolve_ingredients_preserves_every_input_in_order():
+    registry = load_ingredient_registry(VALID_INGREDIENTS)
+
+    resolutions = resolve_ingredients(
+        ["black beans", "black bean", "BLACK BEANS", "unknown"],
+        registry,
+    )
+
+    assert [resolution.input for resolution in resolutions] == [
+        "black beans",
+        "black bean",
+        "BLACK BEANS",
+        "unknown",
+    ]
+    assert [resolution.ingredient_id for resolution in resolutions] == [
+        "black-beans",
+        "black-beans",
+        "black-beans",
+        None,
+    ]
+
+
+def test_application_registry_is_the_approved_canonical_identity_set():
+    assert {
+        ingredient.id: (ingredient.canonical_name, ingredient.aliases)
+        for ingredient in INGREDIENT_REGISTRY.by_id.values()
+    } == {
+        "eggs": ("eggs", ("egg",)),
+        "spinach": ("spinach", ()),
+        "olive-oil": ("olive oil", ()),
+        "black-beans": ("black beans", ("black bean",)),
+        "corn-tortillas": ("corn tortillas", ("corn tortilla",)),
+        "avocado": ("avocado", ()),
+        "lime": ("lime", ()),
+        "noodles": ("noodles", ()),
+        "peanuts": ("peanuts", ("peanut",)),
+        "soy-sauce": ("soy sauce", ()),
+        "lentils": ("lentils", ("lentil",)),
+        "carrots": ("carrots", ("carrot",)),
+        "celery": ("celery", ()),
+        "vegetable-broth": ("vegetable broth", ("vegetable stock",)),
+    }
+
+
+def test_identical_input_and_registry_produce_identical_resolution():
+    first = resolve_ingredients([" Black Bean ", "unknown"], INGREDIENT_REGISTRY)
+    second = resolve_ingredients([" Black Bean ", "unknown"], INGREDIENT_REGISTRY)
+
+    assert first == second
 
 
 def test_load_ingredient_registry_normalizes_terms_and_builds_read_only_indexes():

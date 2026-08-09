@@ -1,12 +1,14 @@
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from pantrypilot.normalization import normalize_ingredient
 
 INGREDIENT_ID_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+IngredientMatchType = Literal["canonical", "alias", "unresolved"]
 
 
 class CanonicalIngredient(BaseModel):
@@ -49,6 +51,29 @@ class IngredientRegistry:
     by_term: Mapping[str, str]
 
 
+class IngredientResolution(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    input: str
+    normalized: str
+    ingredient_id: str | None
+    canonical_name: str | None
+    match_type: IngredientMatchType
+
+    @model_validator(mode="after")
+    def validate_resolution_state(self) -> "IngredientResolution":
+        has_identity = (
+            self.ingredient_id is not None and self.canonical_name is not None
+        )
+        if self.match_type == "unresolved" and (
+            self.ingredient_id is not None or self.canonical_name is not None
+        ):
+            raise ValueError("unresolved ingredients must not contain identity fields")
+        if self.match_type != "unresolved" and not has_identity:
+            raise ValueError("resolved ingredients require both identity fields")
+        return self
+
+
 def load_ingredient_registry(
     records: Iterable[Mapping[str, object]],
 ) -> IngredientRegistry:
@@ -71,3 +96,74 @@ def load_ingredient_registry(
         by_id=MappingProxyType(by_id),
         by_term=MappingProxyType(by_term),
     )
+
+
+def resolve_ingredient(
+    value: str,
+    registry: IngredientRegistry,
+) -> IngredientResolution:
+    normalized = normalize_ingredient(value)
+    ingredient_id = registry.by_term.get(normalized)
+    if ingredient_id is None:
+        return IngredientResolution(
+            input=value,
+            normalized=normalized,
+            ingredient_id=None,
+            canonical_name=None,
+            match_type="unresolved",
+        )
+    ingredient = registry.by_id[ingredient_id]
+    if normalized != ingredient.canonical_name:
+        return IngredientResolution(
+            input=value,
+            normalized=normalized,
+            ingredient_id=ingredient.id,
+            canonical_name=ingredient.canonical_name,
+            match_type="alias",
+        )
+    return IngredientResolution(
+        input=value,
+        normalized=normalized,
+        ingredient_id=ingredient.id,
+        canonical_name=ingredient.canonical_name,
+        match_type="canonical",
+    )
+
+
+def resolve_ingredients(
+    values: Iterable[str],
+    registry: IngredientRegistry,
+) -> tuple[IngredientResolution, ...]:
+    return tuple(resolve_ingredient(value, registry) for value in values)
+
+
+RAW_INGREDIENTS = (
+    {"id": "eggs", "canonical_name": "eggs", "aliases": ["egg"]},
+    {"id": "spinach", "canonical_name": "spinach", "aliases": []},
+    {"id": "olive-oil", "canonical_name": "olive oil", "aliases": []},
+    {
+        "id": "black-beans",
+        "canonical_name": "black beans",
+        "aliases": ["black bean"],
+    },
+    {
+        "id": "corn-tortillas",
+        "canonical_name": "corn tortillas",
+        "aliases": ["corn tortilla"],
+    },
+    {"id": "avocado", "canonical_name": "avocado", "aliases": []},
+    {"id": "lime", "canonical_name": "lime", "aliases": []},
+    {"id": "noodles", "canonical_name": "noodles", "aliases": []},
+    {"id": "peanuts", "canonical_name": "peanuts", "aliases": ["peanut"]},
+    {"id": "soy-sauce", "canonical_name": "soy sauce", "aliases": []},
+    {"id": "lentils", "canonical_name": "lentils", "aliases": ["lentil"]},
+    {"id": "carrots", "canonical_name": "carrots", "aliases": ["carrot"]},
+    {"id": "celery", "canonical_name": "celery", "aliases": []},
+    {
+        "id": "vegetable-broth",
+        "canonical_name": "vegetable broth",
+        "aliases": ["vegetable stock"],
+    },
+)
+
+INGREDIENT_REGISTRY = load_ingredient_registry(RAW_INGREDIENTS)
