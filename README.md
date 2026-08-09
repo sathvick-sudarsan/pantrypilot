@@ -13,10 +13,12 @@ a recipe chatbot or external-API wrapper.
 
 ## Current status
 
-**Feature 001: Explainable Pantry-Based Meal Ranking** is implemented.
-`POST /v1/meal-rankings` ranks the in-memory recipe catalog from pantry
-ingredients and constraints, returning deterministic score evidence and fixed
-explanations.
+**Feature 002: Measured Ingredient Entity Resolution** is implemented. Recipes
+now use canonical ingredient identities; explicit aliases resolve
+deterministically, while unsupported terms abstain. On the v1 fixture, the
+resolver improves recall over Feature 001's exact-name baseline with zero false
+positives. `POST /v1/meal-rankings` retains deterministic ranking and exposes
+structured resolution evidence.
 
 ## Quick start
 
@@ -24,6 +26,7 @@ explanations.
 uv sync --locked --python 3.12
 uv run pytest
 uv run uvicorn pantrypilot.app:app --app-dir src
+uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
 ```
 
 ## Project documents
@@ -32,6 +35,8 @@ uv run uvicorn pantrypilot.app:app --app-dir src
 - [Roadmap](docs/roadmap.md)
 - [Feature 001 design](docs/superpowers/specs/2026-07-25-explainable-meal-ranking-design.md)
 - [Feature 001 learning guide](docs/learning/001-explainable-meal-ranking.md)
+- [Feature 002 design](docs/superpowers/specs/2026-08-08-ingredient-entity-resolution-design.md)
+- [Feature 002 learning guide](docs/learning/002-ingredient-entity-resolution.md)
 - [Contributor instructions](AGENTS.md)
 
 ## Engineering workflow
