@@ -47,8 +47,8 @@ The request-to-response flow is:
 validated raw request terms
     -> trim and lowercase each term
     -> exact canonical-name/alias lookup, or abstain
-    -> pantry-ID and exclusion-ID sets
     -> reject the request if any exclusion is unresolved
+    -> pantry-ID and exclusion-ID sets
     -> filter recipe IDs by exclusions and preparation time
     -> match recipe ingredient IDs against pantry IDs
     -> map IDs to canonical-name result evidence
@@ -154,6 +154,9 @@ the wrong entity and one FN for missing the expected entity.
 precision = TP / (TP + FP)
 recall    = TP / (TP + FN)
 ```
+
+The evaluator rounds precision and recall to four decimal places and returns
+`0.0` when the corresponding denominator is zero.
 
 Precision asks how often produced identities were correct; recall asks how
 many expected identities were found. Both systems receive the same parsed
