@@ -564,9 +564,7 @@ def test_registry_rejects_unknown_record_fields():
 
 
 def test_canonical_ingredient_records_are_frozen():
-    ingredient = load_ingredient_registry([VALID_INGREDIENTS[0]]).by_id[
-        "black-beans"
-    ]
+    ingredient = load_ingredient_registry([VALID_INGREDIENTS[0]]).by_id["black-beans"]
 
     with pytest.raises(ValidationError):
         ingredient.canonical_name = "beans"
@@ -673,8 +671,7 @@ Apply these minimum increments only after their corresponding RED:
    def reject_canonical_name_alias(self) -> "CanonicalIngredient":
        if self.canonical_name in self.aliases:
            raise ValueError(
-               "ingredient alias duplicates canonical name: "
-               f"{self.canonical_name}"
+               f"ingredient alias duplicates canonical name: {self.canonical_name}"
            )
        return self
    ```
@@ -685,8 +682,7 @@ Apply these minimum increments only after their corresponding RED:
    existing_id = by_term.get(term)
    if existing_id is not None:
        raise ValueError(
-           f"ingredient term '{term}' maps to both "
-           f"'{existing_id}' and '{ingredient.id}'"
+           f"ingredient term '{term}' maps to both '{existing_id}' and '{ingredient.id}'"
        )
    by_term[term] = ingredient.id
    ```
@@ -842,7 +838,7 @@ def resolve_ingredient(
         ingredient_id=ingredient.id,
         canonical_name=ingredient.canonical_name,
         match_type="canonical",
-)
+    )
 ```
 
 Immediately after the production symbol exists, remove the temporary guard and
@@ -1346,9 +1342,7 @@ Expected for each RED: the invalid record is accepted or fails for the wrong
 reason. For the unknown ID, add the loader check:
 
 ```python
-raise ValueError(
-    f"unknown ingredient id '{ingredient_id}' in recipe '{recipe.id}'"
-)
+raise ValueError(f"unknown ingredient id '{ingredient_id}' in recipe '{recipe.id}'")
 ```
 
 For duplicate IDs, add the model validator:
@@ -1520,7 +1514,9 @@ def test_rank_recipes_resolves_aliases_and_unknown_pantry_terms_before_matching(
     )
 
     response = rank_recipes(request, CATALOG, INGREDIENT_REGISTRY)
-    tacos = next(result for result in response.results if result.id == "black-bean-tacos")
+    tacos = next(
+        result for result in response.results if result.id == "black-bean-tacos"
+    )
 
     assert [result.id for result in response.results] == [
         "black-bean-tacos",
@@ -1536,7 +1532,9 @@ def test_rank_recipes_resolves_aliases_and_unknown_pantry_terms_before_matching(
     assert tacos.score_breakdown.pantry_coverage.value == 1.0
     assert tacos.score_breakdown.pantry_coverage.contribution == 0.7
     assert tacos.final_score == 0.9167
-    assert [item.match_type for item in response.ingredient_resolution.pantry_items] == [
+    assert [
+        item.match_type for item in response.ingredient_resolution.pantry_items
+    ] == [
         "alias",
         "canonical",
         "canonical",
@@ -1769,12 +1767,16 @@ def test_meal_rankings_exposes_alias_duplicate_and_unresolved_pantry_evidence():
 
     body = response.json()
     assert response.status_code == 200
-    assert [item["match_type"] for item in body["ingredient_resolution"]["pantry_items"]] == [
+    assert [
+        item["match_type"] for item in body["ingredient_resolution"]["pantry_items"]
+    ] == [
         "alias",
         "canonical",
         "unresolved",
     ]
-    assert [item["ingredient_id"] for item in body["ingredient_resolution"]["pantry_items"]] == [
+    assert [
+        item["ingredient_id"] for item in body["ingredient_resolution"]["pantry_items"]
+    ] == [
         "black-beans",
         "black-beans",
         None,
@@ -1861,9 +1863,7 @@ raise HTTPException(
     detail={
         "type": "unresolved_excluded_ingredients",
         "message": "All excluded ingredients must resolve before ranking.",
-        "ingredient_resolution": (
-            exc.ingredient_resolution.model_dump(mode="json")
-        ),
+        "ingredient_resolution": (exc.ingredient_resolution.model_dump(mode="json")),
     },
 ) from exc
 ```
@@ -1901,8 +1901,7 @@ def test_canonical_inputs_preserve_feature_001_result_order_and_scores():
 
     assert response.status_code == 200
     assert [
-        (result["id"], result["final_score"])
-        for result in response.json()["results"]
+        (result["id"], result["final_score"]) for result in response.json()["results"]
     ] == [
         ("spinach-omelet", 0.7334),
         ("peanut-noodles", 0.2156),
@@ -2090,7 +2089,7 @@ def load_evaluation_fixture(
 ) -> EvaluationFixture:
     return EvaluationFixture.model_validate(
         json.loads(path.read_text(encoding="utf-8"))
-)
+    )
 ```
 
 Immediately after the production module exists, remove the temporary guard and
@@ -2324,17 +2323,14 @@ Expected RED: the fixture loads. Add only this registry-reference check, rerun,
 and expect PASS:
 
 ```python
-fixture = EvaluationFixture.model_validate(
-    json.loads(path.read_text(encoding="utf-8"))
-)
+fixture = EvaluationFixture.model_validate(json.loads(path.read_text(encoding="utf-8")))
 for case in fixture.cases:
     if (
         case.expected_ingredient_id is not None
         and case.expected_ingredient_id not in ingredient_registry.by_id
     ):
         raise ValueError(
-            "unknown expected ingredient id: "
-            f"{case.expected_ingredient_id}"
+            f"unknown expected ingredient id: {case.expected_ingredient_id}"
         )
 return fixture
 ```
@@ -2374,11 +2370,7 @@ def test_v1_fixture_covers_all_registered_terms_with_consistent_categories():
             assert resolution.match_type == case.category
             assert resolution.ingredient_id == case.expected_ingredient_id
 
-    assert {
-        case.input
-        for case in fixture.cases
-        if case.category == "unresolved"
-    } == {
+    assert {case.input for case in fixture.cases if case.category == "unresolved"} == {
         "eggplant",
         "black bean sauce",
         "tortilla chips",
@@ -2692,12 +2684,12 @@ def evaluate_resolver(
         false_positives=false_positive_count,
         false_negatives=false_negative_count,
         true_negatives=true_negatives,
-        precision=round(
-            true_positives / precision_denominator, 4
-        ) if precision_denominator else 0.0,
-        recall=round(
-            true_positives / recall_denominator, 4
-        ) if recall_denominator else 0.0,
+        precision=round(true_positives / precision_denominator, 4)
+        if precision_denominator
+        else 0.0,
+        recall=round(true_positives / recall_denominator, 4)
+        if recall_denominator
+        else 0.0,
         false_positive_cases=tuple(false_positives),
         false_negative_cases=tuple(false_negatives),
     )
@@ -2791,9 +2783,7 @@ Then add:
         ("eggplant", None),
     ],
 )
-def test_exact_name_baseline_uses_normalized_canonical_names_only(
-    value, expected_id
-):
+def test_exact_name_baseline_uses_normalized_canonical_names_only(value, expected_id):
     if resolve_exact_name is None:
         pytest.fail("expected production behavior is not implemented")
 
@@ -3055,9 +3045,7 @@ Rerun and expect PASS.
 Add:
 
 ```python
-def test_evaluation_cli_fails_when_an_acceptance_threshold_is_missed(
-    tmp_path, capsys
-):
+def test_evaluation_cli_fails_when_an_acceptance_threshold_is_missed(tmp_path, capsys):
     no_improvement_path = write_fixture(
         tmp_path,
         {
@@ -3118,11 +3106,7 @@ Expected RED before the final return-condition branch: CLI returns success for
 both failing fixtures. Replace `return 0` with:
 
 ```python
-return (
-    0
-    if comparison.recall_improved and comparison.zero_false_positives
-    else 1
-)
+return 0 if comparison.recall_improved and comparison.zero_false_positives else 1
 ```
 
 Rerun and expect PASS.
@@ -3132,9 +3116,7 @@ Rerun and expect PASS.
 Add this test before catching loader errors:
 
 ```python
-def test_evaluation_cli_reports_invalid_fixture_without_traceback(
-    tmp_path, capsys
-):
+def test_evaluation_cli_reports_invalid_fixture_without_traceback(tmp_path, capsys):
     path = tmp_path / "invalid.json"
     path.write_text("{", encoding="utf-8")
 
@@ -3143,9 +3125,7 @@ def test_evaluation_cli_reports_invalid_fixture_without_traceback(
     captured = capsys.readouterr()
     assert exit_code == 2
     assert captured.out == ""
-    assert json.loads(captured.err)["error"].startswith(
-        "invalid evaluation fixture:"
-    )
+    assert json.loads(captured.err)["error"].startswith("invalid evaluation fixture:")
 ```
 
 Run:
