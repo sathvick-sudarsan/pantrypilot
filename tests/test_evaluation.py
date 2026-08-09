@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -380,6 +382,95 @@ def test_evaluation_cli_prints_deterministic_comparison_json(capsys):
 
     assert main([str(FIXTURE_PATH)]) == 0
     assert capsys.readouterr().out == first_output
+
+
+def test_evaluation_module_command_runs_from_the_project_root_without_pythonpath():
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+
+    completed = subprocess.run(
+        [
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "pantrypilot.evaluation",
+            "evaluations/ingredient-resolution-v1.json",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    output = json.loads(completed.stdout)
+    assert output["exact_name_baseline"] == {
+        "true_positives": 14,
+        "false_positives": 0,
+        "false_negatives": 7,
+        "true_negatives": 7,
+        "precision": 1.0,
+        "recall": 0.6667,
+        "false_positive_cases": [],
+        "false_negative_cases": [
+            {
+                "input": "egg",
+                "category": "alias",
+                "expected_ingredient_id": "eggs",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "black bean",
+                "category": "alias",
+                "expected_ingredient_id": "black-beans",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "corn tortilla",
+                "category": "alias",
+                "expected_ingredient_id": "corn-tortillas",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "peanut",
+                "category": "alias",
+                "expected_ingredient_id": "peanuts",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "lentil",
+                "category": "alias",
+                "expected_ingredient_id": "lentils",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "carrot",
+                "category": "alias",
+                "expected_ingredient_id": "carrots",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "vegetable stock",
+                "category": "alias",
+                "expected_ingredient_id": "vegetable-broth",
+                "predicted_ingredient_id": None,
+            },
+        ],
+    }
+    assert output["canonical_alias_resolver"] == {
+        "true_positives": 21,
+        "false_positives": 0,
+        "false_negatives": 0,
+        "true_negatives": 7,
+        "precision": 1.0,
+        "recall": 1.0,
+        "false_positive_cases": [],
+        "false_negative_cases": [],
+    }
+    assert output["recall_improved"] is True
+    assert output["zero_false_positives"] is True
 
 
 def test_evaluation_cli_fails_when_an_acceptance_threshold_is_missed(tmp_path, capsys):
