@@ -1,6 +1,6 @@
 import pytest
 
-from pantrypilot.normalization import normalize_ingredients
+from pantrypilot.normalization import normalize_ingredient, normalize_ingredients
 
 
 def test_normalize_ingredients_trims_lowercases_and_stably_deduplicates():
@@ -14,3 +14,7 @@ def test_normalize_ingredients_trims_lowercases_and_stably_deduplicates():
 def test_normalize_ingredients_rejects_blank_values():
     with pytest.raises(ValueError, match="must not be blank"):
         normalize_ingredients(["eggs", "   "])
+
+
+def test_normalize_ingredient_trims_and_lowercases_without_other_changes():
+    assert normalize_ingredient(" Olive  Oil ") == "olive  oil"

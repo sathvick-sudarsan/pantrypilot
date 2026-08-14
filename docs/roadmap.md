@@ -22,9 +22,23 @@ Evidence: a clean foundation commit and an approved Feature 001 specification.
 Evidence: reproducible API responses, reconstructable scores, and passing
 behavioral tests.
 
-## Phase 2: Persistence and durable data contracts
+## Phase 2: Measured ingredient entity resolution
 
-- Persist recipes, pantry state, and ranking requests.
+- Introduce stable canonical ingredient IDs and human-readable names.
+- Resolve canonical terms and a small explicit alias registry deterministically.
+- Keep unsupported terms unresolved and apply the same identities to pantry
+  matching and hard exclusions.
+- Compare resolution with the normalized exact-name baseline on a versioned
+  labeled fixture.
+
+Evidence: complete catalog coverage, inspectable resolution evidence, zero
+false-positive resolutions on the approved fixture, and strictly higher recall
+than the exact-name baseline.
+
+## Phase 3: Persistence and durable data contracts
+
+- Persist recipes, pantry state, and ranking requests using established
+  canonical ingredient identities.
 - Add schema migrations and stable identifiers.
 - Separate domain behavior from storage without changing ranking semantics.
 - Add production-oriented API error handling and request tracing.
@@ -32,19 +46,20 @@ behavioral tests.
 Evidence: migration tests, contract tests, and equivalent ranking results across
 in-memory and persisted data.
 
-## Phase 3: Ingredient entity resolution and retrieval
+## Phase 4: Retrieval at meaningful catalog scale
 
-- Introduce canonical ingredient entities, aliases, quantities, and units.
-- Measure exact-match failures before adding synonym or fuzzy resolution.
-- Retrieve candidate recipes efficiently from a larger catalog.
-- Evaluate resolution precision and recall against a labeled dataset.
+- Grow the recipe catalog only when representative product needs justify it.
+- Retrieve candidate recipes efficiently before applying ranking.
+- Measure candidate recall and latency against a full-catalog baseline.
+- Preserve canonical ingredient and hard-constraint behavior through retrieval.
 
-Evidence: a versioned entity-resolution dataset, retrieval metrics, and an
-improvement over the exact-match baseline.
+Evidence: a representative catalog-scale benchmark, retrieval recall and
+latency metrics, and unchanged eligibility for hard exclusions.
 
-## Phase 4: Food-waste and constrained meal-plan optimization
+## Phase 5: Food-waste and constrained meal-plan optimization
 
-- Track pantry quantities, purchase dates, and estimated spoilage windows.
+- Track pantry ingredient quantities, units, purchase dates, and estimated
+  spoilage windows.
 - Plan multiple meals jointly rather than ranking one meal at a time.
 - Optimize ingredient reuse, expected waste, nutrition, budget, and time under
   explicit constraints.
@@ -53,7 +68,7 @@ improvement over the exact-match baseline.
 Evidence: solver-backed plans, feasibility tests, scenario benchmarks, and
 measured waste reduction against greedy ranking.
 
-## Phase 5: Personalization and feedback
+## Phase 6: Personalization and feedback
 
 - Capture explicit ratings, selections, skips, and substitutions.
 - Build user preference features while preserving hard dietary constraints.
@@ -63,7 +78,7 @@ measured waste reduction against greedy ranking.
 Evidence: replayable feedback data, personalized offline metrics, and documented
 cold-start behavior.
 
-## Phase 6: Learned ranking, calibration, and experimentation
+## Phase 7: Learned ranking, calibration, and experimentation
 
 - Train a learned ranker against the deterministic and personalized baselines.
 - Define offline ranking metrics and guardrail metrics.
@@ -75,7 +90,7 @@ cold-start behavior.
 Evidence: reproducible training artifacts, baseline comparisons, calibration
 plots, model cards, and experiment readouts.
 
-## Phase 7: Reliable LLM and tool interfaces
+## Phase 8: Reliable LLM and tool interfaces
 
 - Expose ranking, retrieval, planning, and explanation capabilities as typed
   tools.

@@ -9,7 +9,7 @@ from pydantic import (
     field_validator,
 )
 
-from pantrypilot.normalization import normalize_ingredients
+from pantrypilot.ingredients import IngredientResolutionEvidence
 
 
 class RankingRequest(BaseModel):
@@ -34,7 +34,7 @@ class Recipe(BaseModel):
 
     id: str
     name: str
-    required_ingredients: tuple[str, ...] = Field(min_length=1)
+    required_ingredient_ids: tuple[str, ...] = Field(min_length=1)
     calories: int | FiniteFloat = Field(ge=0)
     protein_g: FiniteFloat = Field(ge=0)
     prep_minutes: StrictInt = Field(ge=0)
@@ -53,10 +53,17 @@ class Recipe(BaseModel):
             raise ValueError("nutrition values must be numbers")
         return value
 
-    @field_validator("required_ingredients")
+    @field_validator("required_ingredient_ids")
     @classmethod
-    def normalize_required_ingredients(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return normalize_ingredients(values)
+    def reject_duplicate_required_ingredient_ids(
+        cls, values: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        seen: set[str] = set()
+        for ingredient_id in values:
+            if ingredient_id in seen:
+                raise ValueError(f"duplicate required ingredient id: {ingredient_id}")
+            seen.add(ingredient_id)
+        return values
 
 
 class ScoreComponent(BaseModel):
@@ -75,9 +82,15 @@ class ScoreBreakdown(BaseModel):
     time_fit: ScoreComponent
 
 
-class RankedRecipe(Recipe):
+class RankedRecipe(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    id: str
+    name: str
+    required_ingredients: tuple[str, ...] = Field(min_length=1)
+    calories: int | FiniteFloat = Field(ge=0)
+    protein_g: FiniteFloat = Field(ge=0)
+    prep_minutes: StrictInt = Field(ge=0)
     final_score: float
     matched_ingredients: tuple[str, ...]
     missing_ingredients: tuple[str, ...]
@@ -90,3 +103,4 @@ class RankingResponse(BaseModel):
 
     results: list[RankedRecipe]
     returned_count: int = Field(ge=0)
+    ingredient_resolution: IngredientResolutionEvidence

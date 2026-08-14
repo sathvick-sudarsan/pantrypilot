@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {"input": "eggs", "expected_ingredient_id": "eggs", "category": "canonical"},
+    {"input": "spinach", "expected_ingredient_id": "spinach", "category": "canonical"},
+    {"input": "olive oil", "expected_ingredient_id": "olive-oil", "category": "canonical"},
+    {"input": "black beans", "expected_ingredient_id": "black-beans", "category": "canonical"},
+    {"input": "corn tortillas", "expected_ingredient_id": "corn-tortillas", "category": "canonical"},
+    {"input": "avocado", "expected_ingredient_id": "avocado", "category": "canonical"},
+    {"input": "lime", "expected_ingredient_id": "lime", "category": "canonical"},
+    {"input": "noodles", "expected_ingredient_id": "noodles", "category": "canonical"},
+    {"input": "peanuts", "expected_ingredient_id": "peanuts", "category": "canonical"},
+    {"input": "soy sauce", "expected_ingredient_id": "soy-sauce", "category": "canonical"},
+    {"input": "lentils", "expected_ingredient_id": "lentils", "category": "canonical"},
+    {"input": "carrots", "expected_ingredient_id": "carrots", "category": "canonical"},
+    {"input": "celery", "expected_ingredient_id": "celery", "category": "canonical"},
+    {"input": "vegetable broth", "expected_ingredient_id": "vegetable-broth", "category": "canonical"},
+    {"input": "egg", "expected_ingredient_id": "eggs", "category": "alias"},
+    {"input": "black bean", "expected_ingredient_id": "black-beans", "category": "alias"},
+    {"input": "corn tortilla", "expected_ingredient_id": "corn-tortillas", "category": "alias"},
+    {"input": "peanut", "expected_ingredient_id": "peanuts", "category": "alias"},
+    {"input": "lentil", "expected_ingredient_id": "lentils", "category": "alias"},
+    {"input": "carrot", "expected_ingredient_id": "carrots", "category": "alias"},
+    {"input": "vegetable stock", "expected_ingredient_id": "vegetable-broth", "category": "alias"},
+    {"input": "eggplant", "expected_ingredient_id": null, "category": "unresolved"},
+    {"input": "black bean sauce", "expected_ingredient_id": null, "category": "unresolved"},
+    {"input": "tortilla chips", "expected_ingredient_id": null, "category": "unresolved"},
+    {"input": "peanut oil", "expected_ingredient_id": null, "category": "unresolved"},
+    {"input": "lentil pasta", "expected_ingredient_id": null, "category": "unresolved"},
+    {"input": "carrot cake", "expected_ingredient_id": null, "category": "unresolved"},
+    {"input": "vegetable shortening", "expected_ingredient_id": null, "category": "unresolved"}
+  ]
+}

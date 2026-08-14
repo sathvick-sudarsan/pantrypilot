@@ -81,9 +81,12 @@ work postponed until deployment.
 ## Intended system evolution
 
 PantryPilot begins with an in-memory recipe catalog and transparent weighted
-ranking. The system then gains persistence and stable data contracts, followed
-by ingredient entity resolution and retrieval. Once the data model is reliable,
-it can support multi-meal planning and constrained food-waste optimization.
+ranking. The system then gains measured ingredient entity resolution so later
+persistence can store stable canonical identities. Persistence and durable data
+contracts follow without changing ranking semantics. Retrieval is introduced
+only when catalog scale makes full-catalog ranking meaningfully inefficient.
+Once those foundations are reliable, the system can support multi-meal planning
+and constrained food-waste optimization.
 
 User feedback then enables preference models and personalization. Logged
 decisions and outcomes support offline evaluation, calibrated predictions,

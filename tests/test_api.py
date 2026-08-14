@@ -18,6 +18,75 @@ VALID_REQUEST = {
 }
 
 
+def test_meal_rankings_exposes_alias_duplicate_and_unresolved_pantry_evidence():
+    response = client.post(
+        "/v1/meal-rankings",
+        json={
+            "pantry_items": ["black bean", "black beans", "unknown"],
+            "min_protein_g": 0.0,
+            "max_prep_minutes": 30,
+            "excluded_ingredients": ["peanut"],
+            "limit": 50,
+        },
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert [
+        item["match_type"] for item in body["ingredient_resolution"]["pantry_items"]
+    ] == [
+        "alias",
+        "canonical",
+        "unresolved",
+    ]
+    assert [
+        item["ingredient_id"] for item in body["ingredient_resolution"]["pantry_items"]
+    ] == [
+        "black-beans",
+        "black-beans",
+        None,
+    ]
+    assert body["ingredient_resolution"]["excluded_ingredients"][0] == {
+        "input": "peanut",
+        "normalized": "peanut",
+        "ingredient_id": "peanuts",
+        "canonical_name": "peanuts",
+        "match_type": "alias",
+    }
+    assert "peanut-noodles" not in {result["id"] for result in body["results"]}
+
+
+def test_meal_rankings_returns_fail_closed_422_for_unresolved_exclusion():
+    response = client.post(
+        "/v1/meal-rankings",
+        json={
+            **VALID_REQUEST,
+            "pantry_items": [],
+            "excluded_ingredients": ["groundnut"],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {
+            "type": "unresolved_excluded_ingredients",
+            "message": "All excluded ingredients must resolve before ranking.",
+            "ingredient_resolution": {
+                "pantry_items": [],
+                "excluded_ingredients": [
+                    {
+                        "input": "groundnut",
+                        "normalized": "groundnut",
+                        "ingredient_id": None,
+                        "canonical_name": None,
+                        "match_type": "unresolved",
+                    }
+                ],
+            },
+        }
+    }
+
+
 def test_meal_rankings_returns_known_catalog_result():
     response = client.post("/v1/meal-rankings", json=VALID_REQUEST)
 
@@ -60,6 +129,40 @@ def test_meal_rankings_returns_known_catalog_result():
             }
         ],
         "returned_count": 1,
+        "ingredient_resolution": {
+            "pantry_items": [
+                {
+                    "input": " Eggs ",
+                    "normalized": "eggs",
+                    "ingredient_id": "eggs",
+                    "canonical_name": "eggs",
+                    "match_type": "canonical",
+                },
+                {
+                    "input": "spinach",
+                    "normalized": "spinach",
+                    "ingredient_id": "spinach",
+                    "canonical_name": "spinach",
+                    "match_type": "canonical",
+                },
+                {
+                    "input": "EGGS",
+                    "normalized": "eggs",
+                    "ingredient_id": "eggs",
+                    "canonical_name": "eggs",
+                    "match_type": "canonical",
+                },
+            ],
+            "excluded_ingredients": [
+                {
+                    "input": "peanuts",
+                    "normalized": "peanuts",
+                    "ingredient_id": "peanuts",
+                    "canonical_name": "peanuts",
+                    "match_type": "canonical",
+                }
+            ],
+        },
     }
 
 
@@ -75,7 +178,14 @@ def test_meal_rankings_returns_successful_empty_result():
     response = client.post("/v1/meal-rankings", json=request)
 
     assert response.status_code == 200
-    assert response.json() == {"results": [], "returned_count": 0}
+    assert response.json() == {
+        "results": [],
+        "returned_count": 0,
+        "ingredient_resolution": {
+            "pantry_items": [],
+            "excluded_ingredients": [],
+        },
+    }
 
 
 def test_meal_rankings_returns_all_eligible_results_in_deterministic_order():
@@ -99,6 +209,28 @@ def test_meal_rankings_returns_all_eligible_results_in_deterministic_order():
     ]
     assert response_body["returned_count"] > 1
     assert response_body["returned_count"] == len(response_body["results"])
+
+
+def test_canonical_inputs_preserve_feature_001_result_order_and_scores():
+    response = client.post(
+        "/v1/meal-rankings",
+        json={
+            **VALID_REQUEST,
+            "excluded_ingredients": [],
+            "max_prep_minutes": 45,
+            "limit": 50,
+        },
+    )
+
+    assert response.status_code == 200
+    assert [
+        (result["id"], result["final_score"]) for result in response.json()["results"]
+    ] == [
+        ("spinach-omelet", 0.7334),
+        ("peanut-noodles", 0.2156),
+        ("black-bean-tacos", 0.1964),
+        ("lentil-soup", 0.176),
+    ]
 
 
 @pytest.mark.parametrize(

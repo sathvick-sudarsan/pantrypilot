@@ -1,13 +1,14 @@
 from math import isfinite
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from pantrypilot.catalog import CATALOG
+from pantrypilot.ingredients import INGREDIENT_REGISTRY
 from pantrypilot.models import RankingRequest, RankingResponse
-from pantrypilot.ranking import rank_recipes
+from pantrypilot.ranking import UnresolvedExcludedIngredientsError, rank_recipes
 
 app = FastAPI(title="PantryPilot")
 
@@ -34,5 +35,16 @@ def request_validation_exception_handler(
 
 @app.post("/v1/meal-rankings", response_model=RankingResponse)
 def create_meal_ranking(request: RankingRequest) -> RankingResponse:
-    results = rank_recipes(request, CATALOG)
-    return RankingResponse(results=results, returned_count=len(results))
+    try:
+        return rank_recipes(request, CATALOG, INGREDIENT_REGISTRY)
+    except UnresolvedExcludedIngredientsError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "type": "unresolved_excluded_ingredients",
+                "message": "All excluded ingredients must resolve before ranking.",
+                "ingredient_resolution": (
+                    exc.ingredient_resolution.model_dump(mode="json")
+                ),
+            },
+        ) from exc
