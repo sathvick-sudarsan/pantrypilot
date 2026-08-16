@@ -1,12 +1,33 @@
 import json
+import os
+import sqlite3
+import subprocess
+import sys
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 import pantrypilot.app as app_module
+from pantrypilot.app import create_app
+from pantrypilot.catalog_store import CatalogStoreError
+from pantrypilot.models import Recipe
 
-client = TestClient(app_module.app)
-safe_client = TestClient(app_module.app, raise_server_exceptions=False)
+
+@pytest.fixture
+def client(tmp_path: Path) -> Iterator[TestClient]:
+    with TestClient(create_app(tmp_path / "catalog.sqlite3")) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def safe_client(tmp_path: Path) -> Iterator[TestClient]:
+    with TestClient(
+        create_app(tmp_path / "safe-catalog.sqlite3"),
+        raise_server_exceptions=False,
+    ) as test_client:
+        yield test_client
 
 
 VALID_REQUEST = {
@@ -18,7 +39,106 @@ VALID_REQUEST = {
 }
 
 
-def test_meal_rankings_exposes_alias_duplicate_and_unresolved_pantry_evidence():
+def test_lifespan_initializes_and_publishes_frozen_catalog(tmp_path: Path) -> None:
+    if create_app is None:
+        pytest.fail("create_app is not implemented")
+
+    database_path = tmp_path / "catalog.sqlite3"
+    application = create_app(database_path)
+
+    assert not database_path.exists()
+    with TestClient(application) as client:
+        assert database_path.exists()
+        assert isinstance(client.app.state.recipe_catalog, tuple)
+        assert all(
+            isinstance(recipe, Recipe) for recipe in client.app.state.recipe_catalog
+        )
+        assert len(client.app.state.recipe_catalog) == 4
+
+
+def test_importing_app_does_not_create_database(tmp_path: Path) -> None:
+    database_path = tmp_path / "import-only.sqlite3"
+    environment = os.environ.copy()
+    environment["PANTRYPILOT_DB_PATH"] = str(database_path)
+
+    completed = subprocess.run(
+        [sys.executable, "-c", "import pantrypilot.app"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not database_path.exists()
+
+
+def test_persisted_non_empty_change_is_visible_after_restart(tmp_path: Path) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with TestClient(create_app(database_path)):
+        pass
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE recipes SET name = ? WHERE id = ?",
+            ("Durable Omelet", "spinach-omelet"),
+        )
+
+    with TestClient(create_app(database_path)) as restarted:
+        response = restarted.post(
+            "/v1/meal-rankings",
+            json=VALID_REQUEST,
+        )
+
+    assert response.status_code == 200
+    result = next(
+        item for item in response.json()["results"] if item["id"] == "spinach-omelet"
+    )
+    assert result["name"] == "Durable Omelet"
+
+
+def test_unavailable_storage_prevents_startup(tmp_path: Path) -> None:
+    application = create_app(tmp_path)  # A directory cannot be a SQLite file.
+
+    with pytest.raises(CatalogStoreError, match="catalog connection failed"):
+        with TestClient(application):
+            pass
+
+
+def test_incomplete_current_schema_prevents_startup_without_seed_fallback(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA user_version = 1")
+
+    with pytest.raises(CatalogStoreError):
+        with TestClient(create_app(database_path)):
+            pass
+
+
+def test_request_uses_snapshot_without_database_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = create_app(tmp_path / "catalog.sqlite3")
+    with TestClient(application) as client:
+
+        def fail_if_called(*args: object, **kwargs: object) -> None:
+            raise AssertionError("request attempted database I/O")
+
+        monkeypatch.setattr(app_module, "initialize_catalog", fail_if_called)
+        monkeypatch.setattr(app_module, "load_durable_catalog", fail_if_called)
+
+        response = client.post(
+            "/v1/meal-rankings",
+            json=VALID_REQUEST,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["returned_count"] >= 1
+
+
+def test_meal_rankings_exposes_alias_duplicate_and_unresolved_pantry_evidence(client):
     response = client.post(
         "/v1/meal-rankings",
         json={
@@ -56,7 +176,7 @@ def test_meal_rankings_exposes_alias_duplicate_and_unresolved_pantry_evidence():
     assert "peanut-noodles" not in {result["id"] for result in body["results"]}
 
 
-def test_meal_rankings_returns_fail_closed_422_for_unresolved_exclusion():
+def test_meal_rankings_returns_fail_closed_422_for_unresolved_exclusion(client):
     response = client.post(
         "/v1/meal-rankings",
         json={
@@ -87,7 +207,7 @@ def test_meal_rankings_returns_fail_closed_422_for_unresolved_exclusion():
     }
 
 
-def test_meal_rankings_returns_known_catalog_result():
+def test_meal_rankings_returns_known_catalog_result(client):
     response = client.post("/v1/meal-rankings", json=VALID_REQUEST)
 
     assert response.status_code == 200
@@ -166,7 +286,7 @@ def test_meal_rankings_returns_known_catalog_result():
     }
 
 
-def test_meal_rankings_returns_successful_empty_result():
+def test_meal_rankings_returns_successful_empty_result(client):
     request = {
         **VALID_REQUEST,
         "pantry_items": [],
@@ -188,7 +308,7 @@ def test_meal_rankings_returns_successful_empty_result():
     }
 
 
-def test_meal_rankings_returns_all_eligible_results_in_deterministic_order():
+def test_meal_rankings_returns_all_eligible_results_in_deterministic_order(client):
     response = client.post(
         "/v1/meal-rankings",
         json={
@@ -211,7 +331,7 @@ def test_meal_rankings_returns_all_eligible_results_in_deterministic_order():
     assert response_body["returned_count"] == len(response_body["results"])
 
 
-def test_canonical_inputs_preserve_feature_001_result_order_and_scores():
+def test_canonical_inputs_preserve_feature_001_result_order_and_scores(client):
     response = client.post(
         "/v1/meal-rankings",
         json={
@@ -243,7 +363,7 @@ def test_canonical_inputs_preserve_feature_001_result_order_and_scores():
         "limit",
     ],
 )
-def test_meal_rankings_requires_every_request_field(missing_field):
+def test_meal_rankings_requires_every_request_field(client, missing_field):
     request = {**VALID_REQUEST}
     request.pop(missing_field)
 
@@ -253,7 +373,7 @@ def test_meal_rankings_requires_every_request_field(missing_field):
     assert missing_field in response.text
 
 
-def test_meal_rankings_rejects_fractional_integer():
+def test_meal_rankings_rejects_fractional_integer(client):
     response = client.post(
         "/v1/meal-rankings",
         json={**VALID_REQUEST, "max_prep_minutes": 30.5},
@@ -263,7 +383,7 @@ def test_meal_rankings_rejects_fractional_integer():
     assert "max_prep_minutes" in response.text
 
 
-def test_meal_rankings_rejects_malformed_json():
+def test_meal_rankings_rejects_malformed_json(client):
     response = client.post(
         "/v1/meal-rankings",
         content="{",
@@ -273,7 +393,9 @@ def test_meal_rankings_rejects_malformed_json():
     assert response.status_code == 422
 
 
-def test_unexpected_error_returns_500_without_internal_details(monkeypatch):
+def test_unexpected_error_returns_500_without_internal_details(
+    safe_client, monkeypatch
+):
     def fail_ranking(*_args, **_kwargs):
         raise RuntimeError("private implementation detail")
 
@@ -285,7 +407,7 @@ def test_unexpected_error_returns_500_without_internal_details(monkeypatch):
     assert "private implementation detail" not in response.text
 
 
-def test_identical_http_requests_return_identical_ordered_responses():
+def test_identical_http_requests_return_identical_ordered_responses(client):
     first = client.post("/v1/meal-rankings", json=VALID_REQUEST)
     second = client.post("/v1/meal-rankings", json=VALID_REQUEST)
 
@@ -302,7 +424,7 @@ def test_identical_http_requests_return_identical_ordered_responses():
         ("limit", 51),
     ],
 )
-def test_meal_rankings_rejects_invalid_numeric_boundaries(field, value):
+def test_meal_rankings_rejects_invalid_numeric_boundaries(client, field, value):
     response = client.post(
         "/v1/meal-rankings",
         json={**VALID_REQUEST, field: value},
@@ -321,7 +443,7 @@ def test_meal_rankings_rejects_invalid_numeric_boundaries(field, value):
         ("limit", True),
     ],
 )
-def test_meal_rankings_rejects_wrong_numeric_types(field, value):
+def test_meal_rankings_rejects_wrong_numeric_types(client, field, value):
     response = client.post(
         "/v1/meal-rankings",
         json={**VALID_REQUEST, field: value},
@@ -339,7 +461,9 @@ def test_meal_rankings_rejects_wrong_numeric_types(field, value):
         (float("nan"), "NaN"),
     ],
 )
-def test_meal_rankings_preserves_non_finite_validation_details(value, rendered_input):
+def test_meal_rankings_preserves_non_finite_validation_details(
+    safe_client, value, rendered_input
+):
     response = safe_client.post(
         "/v1/meal-rankings",
         content=json.dumps({**VALID_REQUEST, "min_protein_g": value}),
@@ -356,7 +480,7 @@ def test_meal_rankings_preserves_non_finite_validation_details(value, rendered_i
     }
 
 
-def test_meal_rankings_keeps_null_distinct_from_non_finite_values():
+def test_meal_rankings_keeps_null_distinct_from_non_finite_values(safe_client):
     response = safe_client.post(
         "/v1/meal-rankings",
         json={**VALID_REQUEST, "min_protein_g": None},
@@ -372,7 +496,9 @@ def test_meal_rankings_keeps_null_distinct_from_non_finite_values():
     }
 
 
-def test_unknown_field_with_nested_non_finite_values_returns_serializable_422():
+def test_unknown_field_with_nested_non_finite_values_returns_serializable_422(
+    safe_client,
+):
     response = safe_client.post(
         "/v1/meal-rankings",
         content=json.dumps(
@@ -413,7 +539,7 @@ def test_unknown_field_with_nested_non_finite_values_returns_serializable_422():
     ],
 )
 def test_meal_rankings_rejects_non_finite_values_anywhere_in_payload(
-    request_update, expected_field
+    safe_client, request_update, expected_field
 ):
     response = safe_client.post(
         "/v1/meal-rankings",
@@ -432,7 +558,7 @@ def test_meal_rankings_rejects_non_finite_values_anywhere_in_payload(
         ("excluded_ingredients", [""]),
     ],
 )
-def test_meal_rankings_rejects_blank_ingredient_values(field, value):
+def test_meal_rankings_rejects_blank_ingredient_values(safe_client, field, value):
     response = safe_client.post(
         "/v1/meal-rankings",
         json={**VALID_REQUEST, field: value},
@@ -446,7 +572,7 @@ def test_meal_rankings_rejects_blank_ingredient_values(field, value):
     assert error["input"] == value
 
 
-def test_meal_rankings_rejects_unknown_request_fields():
+def test_meal_rankings_rejects_unknown_request_fields(client):
     response = client.post(
         "/v1/meal-rankings",
         json={**VALID_REQUEST, "ranking_model": "future"},

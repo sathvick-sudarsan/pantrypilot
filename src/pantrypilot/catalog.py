@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Mapping
 
-from pantrypilot.ingredients import INGREDIENT_REGISTRY, IngredientRegistry
+from pantrypilot.ingredients import IngredientRegistry
 from pantrypilot.models import Recipe
 
 
@@ -68,6 +68,3 @@ INITIAL_RECIPE_CATALOG: tuple[dict[str, object], ...] = (
         "prep_minutes": 45,
     },
 )
-
-# Compatibility binding removed in Task 4 when application startup uses SQLite.
-CATALOG = load_catalog(INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)

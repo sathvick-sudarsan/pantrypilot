@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from pantrypilot.catalog import CATALOG
+from pantrypilot.catalog import INITIAL_RECIPE_CATALOG, load_catalog
 from pantrypilot.ingredients import INGREDIENT_REGISTRY
 from pantrypilot.models import RankingRequest, Recipe
 from pantrypilot.ranking import (
@@ -13,6 +13,8 @@ from pantrypilot.ranking import (
     rank_recipes,
     render_explanation,
 )
+
+TEST_CATALOG = load_catalog(INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
 
 
 def make_recipe(
@@ -260,7 +262,7 @@ def test_rank_recipes_resolves_aliases_and_unknown_pantry_terms_before_matching(
         limit=50,
     )
 
-    response = rank_recipes(request, CATALOG, INGREDIENT_REGISTRY)
+    response = rank_recipes(request, TEST_CATALOG, INGREDIENT_REGISTRY)
     tacos = next(
         result for result in response.results if result.id == "black-bean-tacos"
     )
@@ -295,7 +297,7 @@ def test_rank_recipes_resolves_aliases_and_unknown_pantry_terms_before_matching(
 
 
 def test_black_bean_taco_exact_match_baseline_score_remains_reconstructable():
-    tacos = next(recipe for recipe in CATALOG if recipe.id == "black-bean-tacos")
+    tacos = next(recipe for recipe in TEST_CATALOG if recipe.id == "black-bean-tacos")
 
     final_score, breakdown = calculate_score(
         tacos,
@@ -318,7 +320,7 @@ def test_rank_recipes_rejects_unresolved_exclusions_with_complete_evidence():
     )
 
     with pytest.raises(UnresolvedExcludedIngredientsError) as exc_info:
-        rank_recipes(request, CATALOG, INGREDIENT_REGISTRY)
+        rank_recipes(request, TEST_CATALOG, INGREDIENT_REGISTRY)
 
     evidence = exc_info.value.ingredient_resolution
     assert evidence.pantry_items[0].ingredient_id == "black-beans"
