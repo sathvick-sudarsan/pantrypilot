@@ -18,6 +18,7 @@ def test_connect_catalog_uses_explicit_transactions_and_enables_foreign_keys(
     with closing(connect_catalog(tmp_path / "catalog.sqlite3")) as connection:
         enabled = connection.execute("PRAGMA foreign_keys").fetchone()[0]
         isolation_level = connection.isolation_level
+        assert connection.execute("SELECT 1 AS value").fetchone()["value"] == 1
 
     assert enabled == 1
     assert isolation_level is None
