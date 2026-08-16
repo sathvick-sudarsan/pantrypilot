@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import Iterable, Mapping
 from contextlib import closing
 from pathlib import Path
 
@@ -99,6 +100,92 @@ def migrate_catalog(
                 f"at schema version {version}"
             ) from error
         current_version = version
+
+
+def seed_catalog(
+    connection: sqlite3.Connection,
+    database_path: Path,
+    seed_records: Iterable[Mapping[str, object]],
+    ingredient_registry: IngredientRegistry,
+) -> None:
+    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise CatalogStoreError(
+            f"catalog is partially initialized at '{database_path}': "
+            "foreign-key violations exist"
+        )
+
+    recipe_count = connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]
+    relationship_count = connection.execute(
+        "SELECT COUNT(*) FROM recipe_ingredients"
+    ).fetchone()[0]
+    recipe_without_ingredients = connection.execute(
+        "SELECT recipes.id FROM recipes "
+        "LEFT JOIN recipe_ingredients "
+        "ON recipe_ingredients.recipe_id = recipes.id "
+        "GROUP BY recipes.id HAVING COUNT(recipe_ingredients.position) = 0 "
+        "LIMIT 1"
+    ).fetchone()
+
+    if recipe_count and relationship_count and recipe_without_ingredients is None:
+        return
+    if recipe_count or relationship_count or recipe_without_ingredients is not None:
+        raise CatalogStoreError(
+            f"catalog is partially initialized at '{database_path}'"
+        )
+
+    try:
+        recipes = load_catalog(seed_records, ingredient_registry)
+    except (ValidationError, ValueError, TypeError) as error:
+        raise CatalogStoreError(
+            f"catalog seed validation failed for '{database_path}'"
+        ) from error
+
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        for recipe in recipes:
+            connection.execute(
+                "INSERT INTO recipes "
+                "(id, name, calories, protein_g, prep_minutes) VALUES (?, ?, ?, ?, ?)",
+                (
+                    recipe.id,
+                    recipe.name,
+                    recipe.calories,
+                    recipe.protein_g,
+                    recipe.prep_minutes,
+                ),
+            )
+            for position, ingredient_id in enumerate(recipe.required_ingredient_ids):
+                connection.execute(
+                    "INSERT INTO recipe_ingredients "
+                    "(recipe_id, position, ingredient_id) VALUES (?, ?, ?)",
+                    (recipe.id, position, ingredient_id),
+                )
+        connection.commit()
+    except sqlite3.Error as error:
+        connection.rollback()
+        raise CatalogStoreError(f"catalog seed failed for '{database_path}'") from error
+
+
+def initialize_catalog(
+    database_path: Path,
+    seed_records: Iterable[Mapping[str, object]],
+    ingredient_registry: IngredientRegistry,
+) -> None:
+    try:
+        with closing(connect_catalog(database_path)) as connection:
+            migrate_catalog(connection, database_path)
+            seed_catalog(
+                connection,
+                database_path,
+                seed_records,
+                ingredient_registry,
+            )
+    except CatalogStoreError:
+        raise
+    except sqlite3.Error as error:
+        raise CatalogStoreError(
+            f"catalog initialization failed for '{database_path}'"
+        ) from error
 
 
 def load_durable_catalog(

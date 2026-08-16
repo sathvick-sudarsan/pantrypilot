@@ -5,12 +5,15 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from pantrypilot.catalog import INITIAL_RECIPE_CATALOG, load_catalog
 from pantrypilot.catalog_store import (
     CURRENT_SCHEMA_VERSION,
     CatalogStoreError,
     connect_catalog,
+    initialize_catalog,
     load_durable_catalog,
     migrate_catalog,
+    seed_catalog,
 )
 from pantrypilot.ingredients import INGREDIENT_REGISTRY
 from pantrypilot.models import Recipe
@@ -35,6 +38,157 @@ def insert_recipe(
             "INSERT INTO recipe_ingredients VALUES (?, ?, ?)",
             (recipe_id, position, ingredient_id),
         )
+
+
+def test_initialize_catalog_seeds_approved_recipes_and_survives_reopen(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+
+    initialize_catalog(
+        database_path,
+        INITIAL_RECIPE_CATALOG,
+        INGREDIENT_REGISTRY,
+    )
+    recipes = load_durable_catalog(database_path, INGREDIENT_REGISTRY)
+
+    assert sorted(recipes, key=lambda recipe: recipe.id) == sorted(
+        load_catalog(INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY),
+        key=lambda recipe: recipe.id,
+    )
+    with sqlite3.connect(database_path) as reopened:
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert reopened.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 4
+        assert reopened.execute("SELECT COUNT(*) FROM recipe_ingredients").fetchone()[
+            0
+        ] == sum(
+            len(record["required_ingredient_ids"]) for record in INITIAL_RECIPE_CATALOG
+        )
+
+
+def test_invalid_seed_is_validated_before_any_insert(tmp_path: Path) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    invalid_seed = ({**INITIAL_RECIPE_CATALOG[0], "id": ""},)
+
+    with pytest.raises(CatalogStoreError, match="seed validation failed"):
+        initialize_catalog(database_path, invalid_seed, INGREDIENT_REGISTRY)
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT COUNT(*) FROM recipe_ingredients").fetchone()[0]
+            == 0
+        )
+
+
+def test_seed_failure_rolls_back_every_recipe_and_relationship(tmp_path: Path) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        connection.execute(
+            "CREATE TRIGGER reject_peanut_noodles "
+            "BEFORE INSERT ON recipes "
+            "WHEN NEW.id = 'peanut-noodles' "
+            "BEGIN SELECT RAISE(FAIL, 'injected seed failure'); END"
+        )
+        connection.commit()
+
+        with pytest.raises(CatalogStoreError, match="catalog seed failed"):
+            seed_catalog(
+                connection,
+                database_path,
+                INITIAL_RECIPE_CATALOG,
+                INGREDIENT_REGISTRY,
+            )
+
+        assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT COUNT(*) FROM recipe_ingredients").fetchone()[0]
+            == 0
+        )
+
+
+def test_second_initialization_does_not_duplicate_or_overwrite(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    initialize_catalog(database_path, INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE recipes SET name = ? WHERE id = ?",
+            ("Durable Name", "spinach-omelet"),
+        )
+
+    initialize_catalog(
+        database_path,
+        INITIAL_RECIPE_CATALOG,
+        INGREDIENT_REGISTRY,
+    )
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 4
+        assert (
+            connection.execute(
+                "SELECT name FROM recipes WHERE id = 'spinach-omelet'"
+            ).fetchone()[0]
+            == "Durable Name"
+        )
+
+
+def test_recipe_rows_without_any_relationship_rows_fail_initialization(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        insert_recipe(connection, ingredients=())
+        connection.commit()
+
+    with pytest.raises(CatalogStoreError, match="partially initialized"):
+        initialize_catalog(database_path, INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
+
+
+def test_one_zero_relationship_recipe_fails_non_empty_initialization(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        insert_recipe(connection, recipe_id="valid", ingredients=((0, "eggs"),))
+        insert_recipe(connection, recipe_id="incomplete", ingredients=())
+        connection.commit()
+
+    with pytest.raises(CatalogStoreError, match="partially initialized"):
+        initialize_catalog(database_path, INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
+
+
+def test_valid_non_empty_catalog_is_not_reconciled_or_seed_validated(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        insert_recipe(
+            connection,
+            recipe_id="durable-only",
+            name="Durable Only",
+            ingredients=((0, "eggs"),),
+        )
+        connection.commit()
+    invalid_unused_seed = ({**INITIAL_RECIPE_CATALOG[0], "id": ""},)
+
+    initialize_catalog(database_path, invalid_unused_seed, INGREDIENT_REGISTRY)
+
+    assert load_durable_catalog(database_path, INGREDIENT_REGISTRY) == (
+        Recipe(
+            id="durable-only",
+            name="Durable Only",
+            required_ingredient_ids=("eggs",),
+            calories=100,
+            protein_g=10.0,
+            prep_minutes=10,
+        ),
+    )
 
 
 def test_load_durable_catalog_hydrates_frozen_recipes_in_position_order(

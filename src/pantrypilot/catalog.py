@@ -24,7 +24,7 @@ def load_catalog(
     return tuple(catalog)
 
 
-RAW_CATALOG = (
+INITIAL_RECIPE_CATALOG: tuple[dict[str, object], ...] = (
     {
         "id": "spinach-omelet",
         "name": "Spinach Omelet",
@@ -69,4 +69,5 @@ RAW_CATALOG = (
     },
 )
 
-CATALOG = load_catalog(RAW_CATALOG, INGREDIENT_REGISTRY)
+# Compatibility binding removed in Task 4 when application startup uses SQLite.
+CATALOG = load_catalog(INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
