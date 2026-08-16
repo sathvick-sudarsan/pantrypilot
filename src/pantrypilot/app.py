@@ -1,16 +1,22 @@
+import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from math import isfinite
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from pantrypilot.catalog import CATALOG
+from pantrypilot.catalog import INITIAL_RECIPE_CATALOG
+from pantrypilot.catalog_store import initialize_catalog, load_durable_catalog
 from pantrypilot.ingredients import INGREDIENT_REGISTRY
 from pantrypilot.models import RankingRequest, RankingResponse
 from pantrypilot.ranking import UnresolvedExcludedIngredientsError, rank_recipes
 
-app = FastAPI(title="PantryPilot")
+DATABASE_PATH_ENV = "PANTRYPILOT_DB_PATH"
+DEFAULT_DATABASE_PATH = Path("pantrypilot.sqlite3")
 
 
 def _replace_non_finite_values(value: object) -> object:
@@ -25,26 +31,56 @@ def _replace_non_finite_values(value: object) -> object:
     return value
 
 
-@app.exception_handler(RequestValidationError)
-def request_validation_exception_handler(
-    _request: Request, exc: RequestValidationError
-) -> JSONResponse:
-    detail = _replace_non_finite_values(jsonable_encoder(exc.errors()))
-    return JSONResponse(status_code=422, content={"detail": detail})
+def create_app(database_path: Path) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        initialize_catalog(
+            database_path,
+            INITIAL_RECIPE_CATALOG,
+            INGREDIENT_REGISTRY,
+        )
+        application.state.recipe_catalog = load_durable_catalog(
+            database_path,
+            INGREDIENT_REGISTRY,
+        )
+        yield
+
+    application = FastAPI(title="PantryPilot", lifespan=lifespan)
+
+    @application.exception_handler(RequestValidationError)
+    def request_validation_exception_handler(
+        _request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        detail = _replace_non_finite_values(jsonable_encoder(exc.errors()))
+        return JSONResponse(status_code=422, content={"detail": detail})
+
+    @application.post("/v1/meal-rankings", response_model=RankingResponse)
+    def create_meal_ranking(
+        ranking_request: RankingRequest,
+        http_request: Request,
+    ) -> RankingResponse:
+        try:
+            return rank_recipes(
+                ranking_request,
+                http_request.app.state.recipe_catalog,
+                INGREDIENT_REGISTRY,
+            )
+        except UnresolvedExcludedIngredientsError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "type": "unresolved_excluded_ingredients",
+                    "message": (
+                        "All excluded ingredients must resolve before ranking."
+                    ),
+                    "ingredient_resolution": (
+                        exc.ingredient_resolution.model_dump(mode="json")
+                    ),
+                },
+            ) from exc
+
+    return application
 
 
-@app.post("/v1/meal-rankings", response_model=RankingResponse)
-def create_meal_ranking(request: RankingRequest) -> RankingResponse:
-    try:
-        return rank_recipes(request, CATALOG, INGREDIENT_REGISTRY)
-    except UnresolvedExcludedIngredientsError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "type": "unresolved_excluded_ingredients",
-                "message": "All excluded ingredients must resolve before ranking.",
-                "ingredient_resolution": (
-                    exc.ingredient_resolution.model_dump(mode="json")
-                ),
-            },
-        ) from exc
+app = create_app(Path(os.environ.get(DATABASE_PATH_ENV, str(DEFAULT_DATABASE_PATH))))

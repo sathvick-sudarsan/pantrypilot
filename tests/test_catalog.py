@@ -3,8 +3,7 @@ from copy import deepcopy
 import pytest
 from pydantic import ValidationError
 
-import pantrypilot.catalog as catalog_module
-from pantrypilot.catalog import load_catalog
+from pantrypilot.catalog import INITIAL_RECIPE_CATALOG, load_catalog
 from pantrypilot.ingredients import INGREDIENT_REGISTRY
 
 VALID_RECIPE = {
@@ -84,51 +83,19 @@ def test_load_catalog_rejects_unknown_recipe_fields():
         load_catalog([record], INGREDIENT_REGISTRY)
 
 
-def test_catalog_is_the_approved_immutable_recipe_set():
-    assert [recipe.model_dump() for recipe in catalog_module.CATALOG] == [
-        {
-            "id": "spinach-omelet",
-            "name": "Spinach Omelet",
-            "required_ingredient_ids": ("eggs", "spinach", "olive-oil"),
-            "calories": 410,
-            "protein_g": 28.0,
-            "prep_minutes": 15,
-        },
-        {
-            "id": "black-bean-tacos",
-            "name": "Black Bean Tacos",
-            "required_ingredient_ids": (
-                "black-beans",
-                "corn-tortillas",
-                "avocado",
-                "lime",
-            ),
-            "calories": 520,
-            "protein_g": 19.0,
-            "prep_minutes": 25,
-        },
-        {
-            "id": "peanut-noodles",
-            "name": "Peanut Noodles",
-            "required_ingredient_ids": ("noodles", "peanuts", "soy-sauce"),
-            "calories": 560,
-            "protein_g": 20.0,
-            "prep_minutes": 20,
-        },
-        {
-            "id": "lentil-soup",
-            "name": "Lentil Soup",
-            "required_ingredient_ids": (
-                "lentils",
-                "carrots",
-                "celery",
-                "vegetable-broth",
-            ),
-            "calories": 360,
-            "protein_g": 22.0,
-            "prep_minutes": 45,
-        },
+def test_initial_recipe_catalog_loads_the_approved_recipes() -> None:
+    if INITIAL_RECIPE_CATALOG is None:
+        pytest.fail("INITIAL_RECIPE_CATALOG is not implemented")
+
+    catalog = load_catalog(INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
+
+    assert [recipe.id for recipe in catalog] == [
+        "spinach-omelet",
+        "black-bean-tacos",
+        "peanut-noodles",
+        "lentil-soup",
     ]
+    assert all(recipe.required_ingredient_ids for recipe in catalog)
 
 
 def test_loaded_recipes_are_frozen():

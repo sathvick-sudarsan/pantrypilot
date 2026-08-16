@@ -13,12 +13,10 @@ a recipe chatbot or external-API wrapper.
 
 ## Current status
 
-**Feature 002: Measured Ingredient Entity Resolution** is implemented. Recipes
-now use canonical ingredient identities; explicit aliases resolve
-deterministically, while unsupported terms abstain. On the v1 fixture, the
-resolver improves recall over Feature 001's exact-name baseline with zero false
-positives. `POST /v1/meal-rankings` retains deterministic ranking and exposes
-structured resolution evidence.
+**Feature 003: Durable Recipe Catalog** is implemented. Recipes now load from a
+versioned local SQLite store into an immutable startup snapshot. The existing
+deterministic ingredient-resolution and ranking behavior is unchanged, and the
+Feature 002 evaluation remains database-independent.
 
 ## Quick start
 
@@ -29,6 +27,35 @@ uv run uvicorn pantrypilot.app:app --app-dir src
 uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
 ```
 
+## Durable recipe catalog
+
+PantryPilot stores recipes in a local SQLite file. On startup it migrates a
+fresh store, seeds the approved four recipes only when both catalog tables are
+empty, reloads the complete catalog as validated immutable `Recipe` objects,
+and serves ranking requests from that in-memory snapshot. Ranking requests do
+not query SQLite, and startup never falls back to Python seed data after a
+storage failure.
+
+The default file is `pantrypilot.sqlite3` in the process working directory.
+Override it on PowerShell with:
+
+```powershell
+$env:PANTRYPILOT_DB_PATH = "C:\path\to\catalog.sqlite3"
+uv run uvicorn pantrypilot.app:app --reload
+```
+
+The configured path's parent directory must already exist. The SQLite file may
+be absent; PantryPilot creates it on successful first startup, but it does not
+create missing parent directories.
+
+Automatic startup migration and seeding assume PantryPilot's current
+single-process deployment. Coordination for concurrent or multi-worker startup
+is deferred rather than implemented in Feature 003.
+
+Stop the application before moving or deleting the local database. Deleting a
+development database is an explicit reset: the next successful startup creates
+and seeds a fresh store. Never commit the database file.
+
 ## Project documents
 
 - [Product vision](docs/product/vision.md)
@@ -37,6 +64,8 @@ uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.jso
 - [Feature 001 learning guide](docs/learning/001-explainable-meal-ranking.md)
 - [Feature 002 design](docs/superpowers/specs/2026-08-08-ingredient-entity-resolution-design.md)
 - [Feature 002 learning guide](docs/learning/002-ingredient-entity-resolution.md)
+- [Feature 003 design](docs/superpowers/specs/2026-08-15-durable-recipe-catalog-design.md)
+- [Feature 003 learning guide](docs/learning/003-durable-recipe-catalog.md)
 - [Contributor instructions](AGENTS.md)
 
 ## Engineering workflow

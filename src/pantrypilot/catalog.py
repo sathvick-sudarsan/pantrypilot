@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Mapping
 
-from pantrypilot.ingredients import INGREDIENT_REGISTRY, IngredientRegistry
+from pantrypilot.ingredients import IngredientRegistry
 from pantrypilot.models import Recipe
 
 
@@ -24,7 +24,7 @@ def load_catalog(
     return tuple(catalog)
 
 
-RAW_CATALOG = (
+INITIAL_RECIPE_CATALOG: tuple[dict[str, object], ...] = (
     {
         "id": "spinach-omelet",
         "name": "Spinach Omelet",
@@ -68,5 +68,3 @@ RAW_CATALOG = (
         "prep_minutes": 45,
     },
 )
-
-CATALOG = load_catalog(RAW_CATALOG, INGREDIENT_REGISTRY)
