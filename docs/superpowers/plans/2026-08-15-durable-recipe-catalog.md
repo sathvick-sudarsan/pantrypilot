@@ -37,7 +37,7 @@
 
 | Path | Action | Final responsibility |
 |---|---|---|
-| `.gitignore` | Modify | Ignore local `*.sqlite3` catalog files. |
+| `.gitignore` | Modify | Ignore local SQLite catalog files and their journal/WAL sidecars. |
 | `src/pantrypilot/catalog.py` | Modify | Keep `load_catalog`; rename raw records to `INITIAL_RECIPE_CATALOG`; remove production module-level `CATALOG`. |
 | `src/pantrypilot/catalog_store.py` | Create | Concrete SQLite schema, connections, version checks, atomic migration runner, seed initialization, integrity checks, durable aggregation, hydration, and store-specific errors. |
 | `src/pantrypilot/app.py` | Modify | Resolve default/environment DB path, provide `create_app`, initialize/load in non-deprecated lifespan, publish `app.state.recipe_catalog`, and rank the snapshot. |
@@ -438,12 +438,12 @@ def migrate_catalog(
 
 Replace the temporary test bindings with direct imports of `CURRENT_SCHEMA_VERSION` and `migrate_catalog`. Run the three schema/version tests. Expected GREEN: exact schema version 1 exists, a rerun changes nothing, and version 2 is rejected without mutation.
 
-### Step 5: Prove DDL and `user_version` rollback together
+### Step 5: Prove partial DDL rollback and atomic `user_version` rollback
 
-Add the required real partial-failure test. A pre-existing conflicting second table makes migration 1 create `recipes` successfully and then fail on its later DDL statement:
+Add a real partial-DDL failure test. A pre-existing conflicting second table makes migration 1 create `recipes` successfully and then fail before reaching the version update:
 
 ```python
-def test_failed_migration_rolls_back_schema_and_user_version(tmp_path: Path) -> None:
+def test_failed_migration_rolls_back_partial_schema(tmp_path: Path) -> None:
     database_path = tmp_path / "catalog.sqlite3"
     with closing(connect_catalog(database_path)) as connection:
         connection.execute("CREATE TABLE recipe_ingredients (sentinel TEXT)")
@@ -467,10 +467,64 @@ def test_failed_migration_rolls_back_schema_and_user_version(tmp_path: Path) -> 
 Run:
 
 ```powershell
-uv run pytest tests/test_catalog_store.py::test_failed_migration_rolls_back_schema_and_user_version -v
+uv run pytest tests/test_catalog_store.py::test_failed_migration_rolls_back_partial_schema -v
 ```
 
-Expected GREEN only if early DDL and `user_version` remain rolled back. This test must stay real and file-backed; do not mock `sqlite3` or replace individual `execute` calls with `executescript`.
+Expected GREEN only if early DDL rolls back and the pre-existing schema remains. `user_version` stays zero because this failure occurs before the migration runner executes its version update.
+
+Add a separate real commit-time failure test. Import `pantrypilot.catalog_store` as `catalog_store` so the test can substitute a synthetic migration containing a deferred foreign-key violation: every migration statement and `PRAGMA user_version = 1` succeeds, then the deferred constraint fails only when `COMMIT` executes. Trace the real connection so the test proves the version update was reached before commit:
+
+```python
+def test_commit_failure_rolls_back_schema_and_user_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    synthetic_migration = (
+        "CREATE TABLE migration_parents (id INTEGER PRIMARY KEY)",
+        """
+        CREATE TABLE migration_children (
+            parent_id INTEGER NOT NULL
+                REFERENCES migration_parents(id)
+                DEFERRABLE INITIALLY DEFERRED
+        )
+        """,
+        "INSERT INTO migration_children (parent_id) VALUES (1)",
+    )
+    monkeypatch.setattr(
+        catalog_store,
+        "SCHEMA_MIGRATIONS",
+        ((1, synthetic_migration),),
+    )
+
+    traced_statements: list[str] = []
+    with closing(connect_catalog(database_path)) as connection:
+        connection.set_trace_callback(traced_statements.append)
+
+        with pytest.raises(CatalogStoreError) as exc_info:
+            migrate_catalog(connection, database_path)
+
+        connection.set_trace_callback(None)
+        normalized_trace = [
+            " ".join(statement.upper().split()) for statement in traced_statements
+        ]
+        version_index = normalized_trace.index("PRAGMA USER_VERSION = 1")
+        commit_index = normalized_trace.index("COMMIT")
+
+        assert version_index < commit_index
+        assert isinstance(exc_info.value.__cause__, sqlite3.IntegrityError)
+        assert "FOREIGN KEY constraint failed" in str(exc_info.value.__cause__)
+        assert user_version(connection) == 0
+        assert table_names(connection) == set()
+```
+
+Run:
+
+```powershell
+uv run pytest tests/test_catalog_store.py::test_commit_failure_rolls_back_schema_and_user_version -v
+```
+
+Expected GREEN only if the real trace contains the version update before the failing commit and rollback removes the synthetic schema/data while restoring `user_version` to zero. These tests substitute migration inputs, not SQLite behavior; keep them real and file-backed, and never replace individual `execute` calls with `executescript`.
 
 ### Step 6: Prove real storage constraints
 
@@ -1554,7 +1608,7 @@ rg -n "\b(RAW_CATALOG|CATALOG)\b" src tests
 
 Expected: no production module-level `CATALOG`; only `INITIAL_RECIPE_CATALOG`, local test catalog names, and intentional explanatory text remain.
 
-Add `*.sqlite3` to `.gitignore`.
+Add `*.sqlite3`, `*.sqlite3-journal`, `*.sqlite3-wal`, and `*.sqlite3-shm` under a generated-database-state heading in `.gitignore`.
 
 Run:
 
@@ -1908,7 +1962,7 @@ uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.jso
 
 Include three exercises with answers immediately below each:
 
-- Predict which rows remain after the injected migration failure and explain why `user_version` remains zero.
+- Predict which rows remain after the later-DDL migration failure and explain why the version update is never reached; then explain how a deferred commit-time failure proves an already executed `user_version` update rolls back.
 - Predict whether reversed insertion order changes ingredient evidence or ranking result order and name the two explicit ordering rules.
 - Classify five changes—new schema column, first-run initial rows, an admin edit, a Pydantic validation failure, and an alias addition—as migration, seed, runtime mutation, hydration failure, or code-owned registry change.
 
@@ -2007,7 +2061,7 @@ Each boundary is independently reviewable and must be green before the next begi
 | Registry remains code-owned | Task 2 unknown-ID hydration failure; no registry schema/table. |
 | Exact two-table schema and ordered relationships | Task 1 PRAGMA/schema/constraint assertions, including `recipes.id` `NOT NULL` plus real null/blank rejection; Tasks 2 and 5 reverse insertion while preserving `position`. |
 | Explicit transaction ownership | Task 1 connection test requires `isolation_level is None`; migration and seed code retain explicit `BEGIN IMMEDIATE` with direct commit/rollback and no `executescript`. |
-| Real atomic migrations and version update | Task 1 real file-backed later-DDL failure proves early DDL rollback and `user_version == 0`; rerun/no-op and newer-version tests. |
+| Real atomic migrations and version update | Task 1 real file-backed later-DDL failure proves early DDL rollback before the version bump; a separate deferred-FK commit failure trace proves `user_version` executed and then rolled back with the synthetic schema/data; rerun/no-op and newer-version tests. |
 | SQLite typing claims remain precise | Task 1 real constraint failures; Task 2 positive-infinity domain failure; learning guide affinity section. |
 | Migration and seed are separate | Separate `migrate_catalog` and `seed_catalog` interfaces/transactions; Task 3 teaching/tests. |
 | Fresh empty seed, idempotence, valid non-empty authority, partial failure | Task 3 empty/reopen, second init, custom durable catalog, partial-shape, validation-before-insert, and rollback tests. |
@@ -2027,7 +2081,7 @@ Each boundary is independently reviewable and must be green before the next begi
 - **Spec coverage:** Every significant approved-design and Issue #5 acceptance condition maps to a concrete task and runnable evidence above.
 - **Placeholder scan:** No unresolved marker or unspecified test/implementation step remains.
 - **Schema/test consistency:** Schema version 1 declares `recipes.id` as `TEXT PRIMARY KEY NOT NULL`; PRAGMA evidence expects `notnull == 1`, and real inserts prove null, empty, and whitespace-only identities fail.
-- **Transaction consistency:** Every application-owned catalog connection uses `isolation_level=None`; only migration and seed explicitly begin transactions, and their existing commit/rollback evidence remains unchanged.
+- **Transaction consistency:** Every application-owned catalog connection uses `isolation_level=None`; only migration and seed explicitly begin transactions, and real tests separately prove later-DDL rollback and commit-time rollback after the version update.
 - **Type consistency:** Database paths are always `Path`; the immutable catalog is always `tuple[Recipe, ...]`; seed inputs are always `Iterable[Mapping[str, object]]`; the single store exception is always `CatalogStoreError`; app construction is always `create_app(database_path: Path)`.
 - **TDD order:** Every behavior-producing task begins with a focused failing test, names the intended failure, adds minimum implementation, reruns for green, exercises neighbors, refactors only while green, verifies, then commits. The parity/documentation tasks add contract evidence or prose and do not invent production behavior.
 - **Architecture consistency:** One concrete stdlib module owns persistence; `load_catalog` owns domain hydration; FastAPI owns lifespan/state; ranking stays pure. No new dependency or speculative abstraction appears.

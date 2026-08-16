@@ -44,6 +44,14 @@ $env:PANTRYPILOT_DB_PATH = "C:\path\to\catalog.sqlite3"
 uv run uvicorn pantrypilot.app:app --reload
 ```
 
+The configured path's parent directory must already exist. The SQLite file may
+be absent; PantryPilot creates it on successful first startup, but it does not
+create missing parent directories.
+
+Automatic startup migration and seeding assume PantryPilot's current
+single-process deployment. Coordination for concurrent or multi-worker startup
+is deferred rather than implemented in Feature 003.
+
 Stop the application before moving or deleting the local database. Deleting a
 development database is an explicit reset: the next successful startup creates
 and seeds a fresh store. Never commit the database file.

@@ -242,9 +242,13 @@ neither required/matched/missing ingredient evidence nor ranking result order.
   pure ranking without SQLite or HTTP.
 - Real persistence tests use isolated files below `tmp_path` to exercise the
   actual schema, constraints, affinity, hydration, seeding, and invalid rows.
-- The real migration rollback test creates a conflicting second table so the
-  first DDL succeeds and the next fails; it proves both the first DDL and
-  `user_version` roll back.
+- One real migration test creates a conflicting second table so the first DDL
+  succeeds and the next fails. It proves partial DDL rollback; the
+  `user_version` update is never reached.
+- A separate synthetic migration inserts a deferred foreign-key violation. Its
+  trace proves `PRAGMA user_version = 1` executes before `COMMIT`; the
+  commit-time failure then proves the new schema, data, and version all roll
+  back together.
 - Integration/lifespan tests enter `TestClient` as a context manager, proving
   startup creates and publishes the snapshot and storage failure prevents the
   API from starting.
@@ -299,12 +303,17 @@ uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.jso
 The migration rollback test pre-creates a `recipe_ingredients(sentinel TEXT)`
 table. Predict what remains after migration 1 creates `recipes` and then fails
 while trying to create the already-named relationship table. Why is
-`user_version` still zero?
+`user_version` still zero? How does the separate deferred-foreign-key test
+prove the stronger version-atomicity claim?
 
 **Answer:** The pre-existing empty sentinel table remains exactly as it was;
 the newly created `recipes` table and any rows from the failed transaction do
 not remain. `PRAGMA user_version = 1` is never reached, and rollback restores
-the entire migration transaction, so the version stays `0`.
+the partial migration transaction, so the version stays `0`. In the separate
+test, every synthetic migration statement succeeds, trace evidence records
+`PRAGMA user_version = 1` before `COMMIT`, and a deferred foreign-key violation
+fails only at commit. Rollback then removes the synthetic schema/data and
+restores `user_version` to `0`, proving they share the transaction.
 
 ### Exercise 2
 
