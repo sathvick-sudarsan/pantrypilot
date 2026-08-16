@@ -40,9 +40,6 @@ VALID_REQUEST = {
 
 
 def test_lifespan_initializes_and_publishes_frozen_catalog(tmp_path: Path) -> None:
-    if create_app is None:
-        pytest.fail("create_app is not implemented")
-
     database_path = tmp_path / "catalog.sqlite3"
     application = create_app(database_path)
 
@@ -71,6 +68,35 @@ def test_importing_app_does_not_create_database(tmp_path: Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert not database_path.exists()
+
+
+def test_exported_app_uses_configured_database_path_during_lifespan(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "configured.sqlite3"
+    environment = os.environ.copy()
+    environment["PANTRYPILOT_DB_PATH"] = str(database_path)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from fastapi.testclient import TestClient\n"
+                "from pantrypilot.app import app\n"
+                "with TestClient(app):\n"
+                "    pass\n"
+            ),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert database_path.exists()
 
 
 def test_persisted_non_empty_change_is_visible_after_restart(tmp_path: Path) -> None:
