@@ -138,12 +138,10 @@ engineering interview:
 
 ## Current boundary
 
-Feature 001 is an explainable pantry-based meal-ranking API. It intentionally
-uses exact normalized ingredient matching, a small in-memory recipe catalog,
-hard exclusion and preparation-time filters, and a deterministic weighted
-score.
-
-The first feature does not include synonyms, fuzzy matching, embeddings, LLM
-calls, persistence, authentication, a frontend, Docker, or external recipe
-APIs. Those capabilities should be introduced only when the roadmap reaches
-the problem they solve.
+Feature 003 keeps the approved recipe catalog in a local durable SQLite store.
+Application startup migrates and initializes that store, validates the complete
+catalog into immutable domain objects, and ranks an in-memory snapshot through
+the existing deterministic Feature 002 ingredient-resolution and ranking
+pipeline. The ingredient registry remains code-owned, and pantry state,
+ranking/request history, analytics, users, CRUD, quantities, retrieval, and
+optimization are not persisted or implemented yet.
