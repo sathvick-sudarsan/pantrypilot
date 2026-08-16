@@ -1,5 +1,12 @@
 import sqlite3
+from contextlib import closing
 from pathlib import Path
+
+from pydantic import ValidationError
+
+from pantrypilot.catalog import load_catalog
+from pantrypilot.ingredients import IngredientRegistry
+from pantrypilot.models import Recipe
 
 
 class CatalogStoreError(RuntimeError):
@@ -92,3 +99,61 @@ def migrate_catalog(
                 f"at schema version {version}"
             ) from error
         current_version = version
+
+
+def load_durable_catalog(
+    database_path: Path,
+    ingredient_registry: IngredientRegistry,
+) -> tuple[Recipe, ...]:
+    try:
+        with closing(connect_catalog(database_path)) as connection:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version != CURRENT_SCHEMA_VERSION:
+                raise CatalogStoreError(
+                    f"catalog schema version {version} at '{database_path}' "
+                    f"does not match supported version {CURRENT_SCHEMA_VERSION}"
+                )
+
+            if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise CatalogStoreError(
+                    f"catalog integrity check failed for '{database_path}'"
+                )
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise CatalogStoreError(
+                    f"catalog foreign-key check failed for '{database_path}'"
+                )
+
+            records: dict[str, dict[str, object]] = {}
+            ingredients_by_recipe: dict[str, list[str]] = {}
+            for row in connection.execute(
+                "SELECT id, name, calories, protein_g, prep_minutes "
+                "FROM recipes ORDER BY id"
+            ):
+                ingredient_ids: list[str] = []
+                records[row["id"]] = {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "required_ingredient_ids": ingredient_ids,
+                    "calories": row["calories"],
+                    "protein_g": row["protein_g"],
+                    "prep_minutes": row["prep_minutes"],
+                }
+                ingredients_by_recipe[row["id"]] = ingredient_ids
+
+            for row in connection.execute(
+                "SELECT recipe_id, ingredient_id "
+                "FROM recipe_ingredients ORDER BY recipe_id, position"
+            ):
+                ingredient_ids = ingredients_by_recipe.get(row["recipe_id"])
+                if ingredient_ids is None:
+                    raise CatalogStoreError(
+                        f"catalog relationship references missing recipe "
+                        f"'{row['recipe_id']}' at '{database_path}'"
+                    )
+                ingredient_ids.append(row["ingredient_id"])
+
+        return load_catalog(records.values(), ingredient_registry)
+    except CatalogStoreError:
+        raise
+    except (sqlite3.Error, ValidationError, ValueError, TypeError) as error:
+        raise CatalogStoreError(f"catalog load failed for '{database_path}'") from error

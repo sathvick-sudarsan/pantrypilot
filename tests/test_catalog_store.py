@@ -3,13 +3,161 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from pantrypilot.catalog_store import (
     CURRENT_SCHEMA_VERSION,
     CatalogStoreError,
     connect_catalog,
+    load_durable_catalog,
     migrate_catalog,
 )
+from pantrypilot.ingredients import INGREDIENT_REGISTRY
+from pantrypilot.models import Recipe
+
+
+def insert_recipe(
+    connection: sqlite3.Connection,
+    *,
+    recipe_id: str = "recipe-a",
+    name: str = "Recipe A",
+    calories: object = 100,
+    protein_g: object = 10.0,
+    prep_minutes: object = 10,
+    ingredients: tuple[tuple[int, str], ...] = ((0, "eggs"),),
+) -> None:
+    connection.execute(
+        "INSERT INTO recipes VALUES (?, ?, ?, ?, ?)",
+        (recipe_id, name, calories, protein_g, prep_minutes),
+    )
+    for position, ingredient_id in ingredients:
+        connection.execute(
+            "INSERT INTO recipe_ingredients VALUES (?, ?, ?)",
+            (recipe_id, position, ingredient_id),
+        )
+
+
+def test_load_durable_catalog_hydrates_frozen_recipes_in_position_order(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        insert_recipe(
+            connection,
+            ingredients=((2, "olive-oil"), (0, "eggs"), (1, "spinach")),
+        )
+        connection.commit()
+
+    recipes = load_durable_catalog(database_path, INGREDIENT_REGISTRY)
+
+    assert recipes == (
+        Recipe(
+            id="recipe-a",
+            name="Recipe A",
+            required_ingredient_ids=("eggs", "spinach", "olive-oil"),
+            calories=100,
+            protein_g=10.0,
+            prep_minutes=10,
+        ),
+    )
+    with pytest.raises(ValidationError):
+        recipes[0].name = "Changed"
+
+
+def test_zero_relationship_recipe_fails_instead_of_vanishing(tmp_path: Path) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        insert_recipe(connection, ingredients=())
+        connection.commit()
+
+    with pytest.raises(CatalogStoreError, match="catalog load failed") as error:
+        load_durable_catalog(database_path, INGREDIENT_REGISTRY)
+
+    assert isinstance(error.value.__cause__, ValidationError)
+
+
+def test_unknown_canonical_ingredient_fails_complete_load(tmp_path: Path) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        insert_recipe(connection, ingredients=((0, "unknown-ingredient"),))
+        connection.commit()
+
+    with pytest.raises(CatalogStoreError, match="catalog load failed") as error:
+        load_durable_catalog(database_path, INGREDIENT_REGISTRY)
+
+    assert isinstance(error.value.__cause__, ValueError)
+    assert "unknown ingredient id" in str(error.value.__cause__)
+
+
+def test_sqlite_permitted_non_finite_value_fails_domain_hydration(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        insert_recipe(connection, protein_g=float("inf"))
+        connection.commit()
+
+    with pytest.raises(CatalogStoreError, match="catalog load failed") as error:
+        load_durable_catalog(database_path, INGREDIENT_REGISTRY)
+
+    assert isinstance(error.value.__cause__, ValidationError)
+
+
+def test_one_invalid_recipe_fails_catalog_instead_of_skipping_it(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        insert_recipe(connection, recipe_id="valid")
+        insert_recipe(
+            connection,
+            recipe_id="invalid",
+            ingredients=((0, "unknown-ingredient"),),
+        )
+        connection.commit()
+
+    with pytest.raises(CatalogStoreError, match="catalog load failed"):
+        load_durable_catalog(database_path, INGREDIENT_REGISTRY)
+
+
+def test_current_version_with_missing_schema_fails_load(tmp_path: Path) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA user_version = 1")
+
+    with pytest.raises(CatalogStoreError, match="catalog load failed"):
+        load_durable_catalog(database_path, INGREDIENT_REGISTRY)
+
+
+def test_foreign_key_violation_fails_before_hydration(tmp_path: Path) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(
+            "INSERT INTO recipe_ingredients VALUES (?, ?, ?)",
+            ("missing", 0, "eggs"),
+        )
+
+    with pytest.raises(CatalogStoreError, match="foreign-key check failed"):
+        load_durable_catalog(database_path, INGREDIENT_REGISTRY)
+
+
+@pytest.mark.parametrize("version", [0, 2])
+def test_wrong_schema_version_fails_load(tmp_path: Path, version: int) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(f"PRAGMA user_version = {version}")
+
+    with pytest.raises(CatalogStoreError, match="does not match supported"):
+        load_durable_catalog(database_path, INGREDIENT_REGISTRY)
 
 
 def test_connect_catalog_uses_explicit_transactions_and_enables_foreign_keys(
