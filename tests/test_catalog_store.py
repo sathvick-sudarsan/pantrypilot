@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import pantrypilot.catalog_store as catalog_store
 from pantrypilot.catalog import INITIAL_RECIPE_CATALOG, load_catalog
 from pantrypilot.catalog_store import (
     CURRENT_SCHEMA_VERSION,
@@ -428,7 +429,7 @@ def test_newer_schema_version_is_rejected(tmp_path: Path) -> None:
         assert table_names(connection) == set()
 
 
-def test_failed_migration_rolls_back_schema_and_user_version(tmp_path: Path) -> None:
+def test_failed_migration_rolls_back_partial_schema(tmp_path: Path) -> None:
     database_path = tmp_path / "catalog.sqlite3"
     with closing(connect_catalog(database_path)) as connection:
         connection.execute("CREATE TABLE recipe_ingredients (sentinel TEXT)")
@@ -447,6 +448,49 @@ def test_failed_migration_rolls_back_schema_and_user_version(tmp_path: Path) -> 
         )
         assert "recipes" not in table_names(connection)
         assert user_version(connection) == 0
+
+
+def test_commit_failure_rolls_back_schema_and_user_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    synthetic_migration = (
+        "CREATE TABLE migration_parents (id INTEGER PRIMARY KEY)",
+        """
+        CREATE TABLE migration_children (
+            parent_id INTEGER NOT NULL
+                REFERENCES migration_parents(id)
+                DEFERRABLE INITIALLY DEFERRED
+        )
+        """,
+        "INSERT INTO migration_children (parent_id) VALUES (1)",
+    )
+    monkeypatch.setattr(
+        catalog_store,
+        "SCHEMA_MIGRATIONS",
+        ((1, synthetic_migration),),
+    )
+
+    traced_statements: list[str] = []
+    with closing(connect_catalog(database_path)) as connection:
+        connection.set_trace_callback(traced_statements.append)
+
+        with pytest.raises(CatalogStoreError) as exc_info:
+            migrate_catalog(connection, database_path)
+
+        connection.set_trace_callback(None)
+        normalized_trace = [
+            " ".join(statement.upper().split()) for statement in traced_statements
+        ]
+        version_index = normalized_trace.index("PRAGMA USER_VERSION = 1")
+        commit_index = normalized_trace.index("COMMIT")
+
+        assert version_index < commit_index
+        assert isinstance(exc_info.value.__cause__, sqlite3.IntegrityError)
+        assert "FOREIGN KEY constraint failed" in str(exc_info.value.__cause__)
+        assert user_version(connection) == 0
+        assert table_names(connection) == set()
 
 
 @pytest.mark.parametrize(

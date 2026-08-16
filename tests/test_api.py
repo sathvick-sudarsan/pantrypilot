@@ -149,11 +149,10 @@ def test_request_uses_snapshot_without_database_io(
     application = create_app(tmp_path / "catalog.sqlite3")
     with TestClient(application) as client:
 
-        def fail_if_called(*args: object, **kwargs: object) -> None:
+        def fail_if_called(*args: object, **kwargs: object) -> sqlite3.Connection:
             raise AssertionError("request attempted database I/O")
 
-        monkeypatch.setattr(app_module, "initialize_catalog", fail_if_called)
-        monkeypatch.setattr(app_module, "load_durable_catalog", fail_if_called)
+        monkeypatch.setattr(sqlite3, "connect", fail_if_called)
 
         response = client.post(
             "/v1/meal-rankings",
