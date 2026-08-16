@@ -62,6 +62,7 @@ Define these interfaces once and use these names and types in every task:
 # src/pantrypilot/catalog.py
 INITIAL_RECIPE_CATALOG: tuple[dict[str, object], ...]
 
+
 def load_catalog(
     records: Iterable[Mapping[str, object]],
     ingredient_registry: IngredientRegistry,
@@ -73,15 +74,19 @@ def load_catalog(
 CURRENT_SCHEMA_VERSION = 1
 SCHEMA_MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...]
 
+
 class CatalogStoreError(RuntimeError):
     """A deterministic catalog connection, schema, seed, or load failure."""
 
+
 def connect_catalog(database_path: Path) -> sqlite3.Connection: ...
+
 
 def migrate_catalog(
     connection: sqlite3.Connection,
     database_path: Path,
 ) -> None: ...
+
 
 def seed_catalog(
     connection: sqlite3.Connection,
@@ -90,11 +95,13 @@ def seed_catalog(
     ingredient_registry: IngredientRegistry,
 ) -> None: ...
 
+
 def initialize_catalog(
     database_path: Path,
     seed_records: Iterable[Mapping[str, object]],
     ingredient_registry: IngredientRegistry,
 ) -> None: ...
+
 
 def load_durable_catalog(
     database_path: Path,
@@ -109,11 +116,11 @@ def load_durable_catalog(
 DATABASE_PATH_ENV = "PANTRYPILOT_DB_PATH"
 DEFAULT_DATABASE_PATH = Path("pantrypilot.sqlite3")
 
+
 def create_app(database_path: Path) -> FastAPI: ...
 
-app = create_app(
-    Path(os.environ.get(DATABASE_PATH_ENV, str(DEFAULT_DATABASE_PATH)))
-)
+
+app = create_app(Path(os.environ.get(DATABASE_PATH_ENV, str(DEFAULT_DATABASE_PATH))))
 ```
 
 During a successful lifespan:
@@ -125,7 +132,9 @@ app.state.recipe_catalog: tuple[Recipe, ...]
 The endpoint continues to call the unchanged boundary:
 
 ```python
-rank_recipes(ranking_request, http_request.app.state.recipe_catalog, INGREDIENT_REGISTRY)
+rank_recipes(
+    ranking_request, http_request.app.state.recipe_catalog, INGREDIENT_REGISTRY
+)
 ```
 
 `Path` is the only database-path representation. `CatalogStoreError` is the only new public exception type. There is no generic repository interface.
@@ -355,10 +364,13 @@ def test_current_migration_rerun_is_a_no_op(tmp_path: Path) -> None:
 
         migrate_catalog(connection, database_path)
 
-        assert connection.execute(
-            "SELECT name, sql FROM sqlite_master "
-            "WHERE type IN ('table', 'index') ORDER BY name"
-        ).fetchall() == schema_before
+        assert (
+            connection.execute(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE type IN ('table', 'index') ORDER BY name"
+            ).fetchall()
+            == schema_before
+        )
         assert user_version(connection) == 1
 
 
@@ -436,17 +448,18 @@ def test_failed_migration_rolls_back_schema_and_user_version(tmp_path: Path) -> 
     with closing(connect_catalog(database_path)) as connection:
         connection.execute("CREATE TABLE recipe_ingredients (sentinel TEXT)")
         schema_before = connection.execute(
-            "SELECT name, sql FROM sqlite_master "
-            "WHERE type = 'table' ORDER BY name"
+            "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name"
         ).fetchall()
 
         with pytest.raises(CatalogStoreError, match="schema version 1"):
             migrate_catalog(connection, database_path)
 
-        assert connection.execute(
-            "SELECT name, sql FROM sqlite_master "
-            "WHERE type = 'table' ORDER BY name"
-        ).fetchall() == schema_before
+        assert (
+            connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name"
+            ).fetchall()
+            == schema_before
+        )
         assert "recipes" not in table_names(connection)
         assert user_version(connection) == 0
 ```
@@ -769,9 +782,7 @@ def load_durable_catalog(
     except CatalogStoreError:
         raise
     except (sqlite3.Error, ValidationError, ValueError, TypeError) as error:
-        raise CatalogStoreError(
-            f"catalog load failed for '{database_path}'"
-        ) from error
+        raise CatalogStoreError(f"catalog load failed for '{database_path}'") from error
 ```
 
 Keep the two-table queries separate so a recipe with zero relationships remains present for Pydantic to reject. The `ORDER BY` clauses make hydration deterministic; neither ordering controls ranking.
@@ -987,11 +998,10 @@ def test_initialize_catalog_seeds_approved_recipes_and_survives_reopen(
     with sqlite3.connect(database_path) as reopened:
         assert reopened.execute("PRAGMA user_version").fetchone()[0] == 1
         assert reopened.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 4
-        assert reopened.execute(
-            "SELECT COUNT(*) FROM recipe_ingredients"
-        ).fetchone()[0] == sum(
-            len(record["required_ingredient_ids"])
-            for record in INITIAL_RECIPE_CATALOG
+        assert reopened.execute("SELECT COUNT(*) FROM recipe_ingredients").fetchone()[
+            0
+        ] == sum(
+            len(record["required_ingredient_ids"]) for record in INITIAL_RECIPE_CATALOG
         )
 ```
 
@@ -1072,9 +1082,7 @@ def seed_catalog(
         connection.commit()
     except sqlite3.Error as error:
         connection.rollback()
-        raise CatalogStoreError(
-            f"catalog seed failed for '{database_path}'"
-        ) from error
+        raise CatalogStoreError(f"catalog seed failed for '{database_path}'") from error
 
 
 def initialize_catalog(
@@ -1115,9 +1123,10 @@ def test_invalid_seed_is_validated_before_any_insert(tmp_path: Path) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT COUNT(*) FROM recipe_ingredients"
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT COUNT(*) FROM recipe_ingredients").fetchone()[0]
+            == 0
+        )
 
 
 def test_seed_failure_rolls_back_every_recipe_and_relationship(tmp_path: Path) -> None:
@@ -1141,9 +1150,10 @@ def test_seed_failure_rolls_back_every_recipe_and_relationship(tmp_path: Path) -
             )
 
         assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT COUNT(*) FROM recipe_ingredients"
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT COUNT(*) FROM recipe_ingredients").fetchone()[0]
+            == 0
+        )
 ```
 
 Run each focused test. Expected GREEN: invalid domain input never starts insertion; a real later SQLite failure rolls back earlier recipe and relationship inserts.
@@ -1172,9 +1182,12 @@ def test_second_initialization_does_not_duplicate_or_overwrite(
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 4
-        assert connection.execute(
-            "SELECT name FROM recipes WHERE id = 'spinach-omelet'"
-        ).fetchone()[0] == "Durable Name"
+        assert (
+            connection.execute(
+                "SELECT name FROM recipes WHERE id = 'spinach-omelet'"
+            ).fetchone()[0]
+            == "Durable Name"
+        )
 
 
 def test_recipe_rows_without_any_relationship_rows_fail_initialization(
@@ -1316,8 +1329,7 @@ def test_lifespan_initializes_and_publishes_frozen_catalog(tmp_path: Path) -> No
         assert database_path.exists()
         assert isinstance(client.app.state.recipe_catalog, tuple)
         assert all(
-            isinstance(recipe, Recipe)
-            for recipe in client.app.state.recipe_catalog
+            isinstance(recipe, Recipe) for recipe in client.app.state.recipe_catalog
         )
         assert len(client.app.state.recipe_catalog) == 4
 ```
@@ -1407,9 +1419,7 @@ def create_app(database_path: Path) -> FastAPI:
     return application
 
 
-app = create_app(
-    Path(os.environ.get(DATABASE_PATH_ENV, str(DEFAULT_DATABASE_PATH)))
-)
+app = create_app(Path(os.environ.get(DATABASE_PATH_ENV, str(DEFAULT_DATABASE_PATH))))
 ```
 
 Keep the existing module-level `_replace_non_finite_values` helper unchanged above `create_app`. FastAPI's existing generic unexpected-error response remains unchanged; do not add a new catch-all handler.
@@ -1468,8 +1478,7 @@ def test_persisted_non_empty_change_is_visible_after_restart(tmp_path: Path) -> 
 
     assert response.status_code == 200
     result = next(
-        item for item in response.json()["results"]
-        if item["id"] == "spinach-omelet"
+        item for item in response.json()["results"] if item["id"] == "spinach-omelet"
     )
     assert result["name"] == "Durable Omelet"
 
@@ -1509,6 +1518,7 @@ def test_request_uses_snapshot_without_database_io(
 
     application = create_app(tmp_path / "catalog.sqlite3")
     with TestClient(application) as client:
+
         def fail_if_called(*args: object, **kwargs: object) -> None:
             raise AssertionError("request attempted database I/O")
 

@@ -1,6 +1,6 @@
 # Feature 003: Durable recipe catalog and ranking parity
 
-Status: Proposed for owner review
+Status: Approved
 
 Design date: 2026-08-15
 
