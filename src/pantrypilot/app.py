@@ -16,6 +16,7 @@ from pantrypilot.models import (
     RankingRequest,
     RankingResponse,
     SavedPantryItem,
+    SavedPantryRankingRequest,
     SavedPantryResponse,
     SavedPantryWriteRequest,
 )
@@ -85,6 +86,25 @@ def create_app(database_path: Path) -> FastAPI:
             )
         return ingredient_ids
 
+    def rank_or_422(ranking_request: RankingRequest) -> RankingResponse:
+        try:
+            return rank_recipes(
+                ranking_request,
+                application.state.recipe_catalog,
+                INGREDIENT_REGISTRY,
+            )
+        except UnresolvedExcludedIngredientsError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "type": "unresolved_excluded_ingredients",
+                    "message": "All excluded ingredients must resolve before ranking.",
+                    "ingredient_resolution": (
+                        exc.ingredient_resolution.model_dump(mode="json")
+                    ),
+                },
+            ) from exc
+
     @application.exception_handler(RequestValidationError)
     def request_validation_exception_handler(
         _request: Request,
@@ -111,27 +131,8 @@ def create_app(database_path: Path) -> FastAPI:
     @application.post("/v1/meal-rankings", response_model=RankingResponse)
     def create_meal_ranking(
         ranking_request: RankingRequest,
-        http_request: Request,
     ) -> RankingResponse:
-        try:
-            return rank_recipes(
-                ranking_request,
-                http_request.app.state.recipe_catalog,
-                INGREDIENT_REGISTRY,
-            )
-        except UnresolvedExcludedIngredientsError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "type": "unresolved_excluded_ingredients",
-                    "message": (
-                        "All excluded ingredients must resolve before ranking."
-                    ),
-                    "ingredient_resolution": (
-                        exc.ingredient_resolution.model_dump(mode="json")
-                    ),
-                },
-            ) from exc
+        return rank_or_422(ranking_request)
 
     @application.put("/v1/saved-pantry", response_model=SavedPantryResponse)
     def replace_saved_pantry_route(
@@ -171,6 +172,23 @@ def create_app(database_path: Path) -> FastAPI:
     @application.get("/v1/saved-pantry", response_model=SavedPantryResponse)
     def get_saved_pantry() -> SavedPantryResponse:
         return saved_pantry_response(required_saved_pantry())
+
+    @application.post(
+        "/v1/saved-pantry/meal-rankings",
+        response_model=RankingResponse,
+    )
+    def create_saved_pantry_meal_ranking(
+        request: SavedPantryRankingRequest,
+    ) -> RankingResponse:
+        canonical_names = [
+            INGREDIENT_REGISTRY.by_id[ingredient_id].canonical_name
+            for ingredient_id in required_saved_pantry()
+        ]
+        ranking_request = RankingRequest(
+            pantry_items=canonical_names,
+            **request.model_dump(),
+        )
+        return rank_or_422(ranking_request)
 
     return application
 

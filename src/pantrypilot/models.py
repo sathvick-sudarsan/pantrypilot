@@ -57,6 +57,22 @@ class RankingRequest(BaseModel):
         return values
 
 
+class SavedPantryRankingRequest(BaseModel):
+    min_protein_g: Annotated[FiniteFloat, Field(ge=0, strict=True)]
+    max_prep_minutes: Annotated[StrictInt, Field(ge=0)]
+    excluded_ingredients: list[str]
+    limit: Annotated[StrictInt, Field(ge=1, le=50)]
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("excluded_ingredients")
+    @classmethod
+    def reject_blank_exclusions(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("ingredient values must not be blank")
+        return values
+
+
 class Recipe(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

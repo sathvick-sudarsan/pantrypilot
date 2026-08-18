@@ -39,6 +39,13 @@ VALID_REQUEST = {
     "limit": 1,
 }
 
+SAVED_RANKING_REQUEST = {
+    "min_protein_g": 0.0,
+    "max_prep_minutes": 30,
+    "excluded_ingredients": [],
+    "limit": 50,
+}
+
 
 def test_lifespan_initializes_and_publishes_frozen_catalog(tmp_path: Path) -> None:
     database_path = tmp_path / "catalog.sqlite3"
@@ -814,3 +821,101 @@ def test_saved_pantry_survives_application_restart(tmp_path: Path) -> None:
                 {"ingredient_id": "spinach", "canonical_name": "spinach"},
             ]
         }
+
+
+def test_saved_ranking_returns_same_exact_absent_404(client: TestClient) -> None:
+    response = client.post(
+        "/v1/saved-pantry/meal-rankings",
+        json=SAVED_RANKING_REQUEST,
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": {
+            "type": "saved_pantry_not_found",
+            "message": "No saved pantry has been established.",
+        }
+    }
+
+
+def test_saved_ranking_accepts_established_empty_pantry(client: TestClient) -> None:
+    assert client.put("/v1/saved-pantry", json={"pantry_items": []}).status_code == 200
+
+    response = client.post(
+        "/v1/saved-pantry/meal-rankings",
+        json=SAVED_RANKING_REQUEST,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["returned_count"] > 0
+    assert all(
+        result["score_breakdown"]["pantry_coverage"]["value"] == 0.0
+        for result in response.json()["results"]
+    )
+
+
+def test_saved_ranking_rejects_pantry_items_and_inline_omission_stays_invalid(
+    client: TestClient,
+) -> None:
+    assert (
+        client.post(
+            "/v1/saved-pantry/meal-rankings",
+            json={**SAVED_RANKING_REQUEST, "pantry_items": ["eggs"]},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/v1/meal-rankings",
+            json=SAVED_RANKING_REQUEST,
+        ).status_code
+        == 422
+    )
+
+
+def test_saved_ranking_preserves_fail_closed_unresolved_exclusions(
+    client: TestClient,
+) -> None:
+    assert (
+        client.put("/v1/saved-pantry", json={"pantry_items": ["eggs"]}).status_code
+        == 200
+    )
+
+    response = client.post(
+        "/v1/saved-pantry/meal-rankings",
+        json={**SAVED_RANKING_REQUEST, "excluded_ingredients": ["groundnut"]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["type"] == "unresolved_excluded_ingredients"
+    assert (
+        response.json()["detail"]["ingredient_resolution"]["excluded_ingredients"][0][
+            "input"
+        ]
+        == "groundnut"
+    )
+
+
+def test_saved_ranking_maps_pantry_store_error_to_exact_safe_503(
+    safe_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_read(*_args: object, **_kwargs: object) -> None:
+        raise PantryStoreError("C:\\private\\pantry.sqlite3: SQL secret")
+
+    monkeypatch.setattr(app_module, "load_saved_pantry", fail_read)
+
+    response = safe_client.post(
+        "/v1/saved-pantry/meal-rankings",
+        json=SAVED_RANKING_REQUEST,
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "type": "saved_pantry_unavailable",
+            "message": "Saved pantry is unavailable.",
+        }
+    }
+    assert "private" not in response.text
+    assert "SQL" not in response.text
