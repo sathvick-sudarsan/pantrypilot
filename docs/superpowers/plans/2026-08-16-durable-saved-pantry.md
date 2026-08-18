@@ -86,12 +86,15 @@ class SavedPantryWriteRequest(BaseModel):
         Field(max_length=100),
     ]
 
+
 class SavedPantryItem(BaseModel):
     ingredient_id: str
     canonical_name: str
 
+
 class SavedPantryResponse(BaseModel):
     pantry_items: tuple[SavedPantryItem, ...]
+
 
 class SavedPantryRankingRequest(BaseModel):
     min_protein_g: Annotated[FiniteFloat, Field(ge=0, strict=True)]
@@ -192,7 +195,9 @@ def create_populated_v1(connection: sqlite3.Connection) -> None:
     connection.commit()
 
 
-def recipe_rows(connection: sqlite3.Connection) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+def recipe_rows(
+    connection: sqlite3.Connection,
+) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
     return (
         connection.execute("SELECT * FROM recipes ORDER BY id").fetchall(),
         connection.execute(
@@ -276,10 +281,13 @@ def test_current_version_migration_is_a_no_op(tmp_path: Path) -> None:
 
         migrate_database(connection, database_path)
 
-        assert connection.execute(
-            "SELECT name, sql FROM sqlite_master "
-            "WHERE type IN ('table', 'index') ORDER BY name"
-        ).fetchall() == schema_before
+        assert (
+            connection.execute(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE type IN ('table', 'index') ORDER BY name"
+            ).fetchall()
+            == schema_before
+        )
         assert user_version(connection) == 2
 
 
@@ -296,9 +304,12 @@ def test_newer_schema_version_fails_without_mutation(tmp_path: Path) -> None:
             migrate_database(connection, database_path)
 
         assert user_version(connection) == 3
-        assert connection.execute(
-            "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name"
-        ).fetchall() == before
+        assert (
+            connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name"
+            ).fetchall()
+            == before
+        )
 ```
 
 Keep the existing recipe-column/index/constraint assertions when moving the old version-1 schema test; update its final expected table set and schema version to include version 2 rather than deleting that evidence.
@@ -388,7 +399,9 @@ def connect_database(database_path: Path) -> sqlite3.Connection:
     except sqlite3.Error as exc:
         if connection is not None:
             connection.close()
-        raise DatabaseError(f"database connection failed for '{database_path}'") from exc
+        raise DatabaseError(
+            f"database connection failed for '{database_path}'"
+        ) from exc
 
 
 def migrate_database(
@@ -480,9 +493,10 @@ def test_migration_two_ddl_conflict_rolls_back_first_table_and_keeps_v1(
 
         assert user_version(connection) == 1
         assert "saved_pantry" not in table_names(connection)
-        assert connection.execute(
-            "PRAGMA table_info(saved_pantry_items)"
-        ).fetchall()[0][1] == "sentinel"
+        assert (
+            connection.execute("PRAGMA table_info(saved_pantry_items)").fetchall()[0][1]
+            == "sentinel"
+        )
         assert recipe_rows(connection) == before_recipes
 
 
@@ -762,9 +776,12 @@ def load_saved_pantry(
             _require_current_schema(connection)
             try:
                 connection.execute("BEGIN")
-                if connection.execute(
-                    "PRAGMA foreign_key_check(saved_pantry_items)"
-                ).fetchone() is not None:
+                if (
+                    connection.execute(
+                        "PRAGMA foreign_key_check(saved_pantry_items)"
+                    ).fetchone()
+                    is not None
+                ):
                     raise PantryStoreError("saved pantry foreign key integrity failed")
                 marker_rows = connection.execute(
                     "SELECT id FROM saved_pantry ORDER BY id"
@@ -836,7 +853,9 @@ def test_corrupt_or_unknown_durable_state_fails_the_complete_read(
     with sqlite3.connect(database_path) as connection:
         connection.execute("PRAGMA ignore_check_constraints = ON")
         connection.execute("INSERT OR IGNORE INTO saved_pantry (id) VALUES (1)")
-        connection.execute("INSERT OR IGNORE INTO saved_pantry_items VALUES (1, 'eggs')")
+        connection.execute(
+            "INSERT OR IGNORE INTO saved_pantry_items VALUES (1, 'eggs')"
+        )
         connection.execute(corruption_sql)
 
     with pytest.raises(PantryStoreError):
@@ -1067,9 +1086,7 @@ def test_saved_pantry_write_accepts_zero_and_one_hundred_items(count: int) -> No
 
 def test_saved_pantry_write_rejects_one_hundred_one_items() -> None:
     with pytest.raises(ValidationError):
-        SavedPantryWriteRequest(
-            pantry_items=[f"item-{index}" for index in range(101)]
-        )
+        SavedPantryWriteRequest(pantry_items=[f"item-{index}" for index in range(101)])
 
 
 def test_saved_pantry_write_accepts_one_hundred_character_nonblank_item() -> None:
@@ -1278,9 +1295,7 @@ def test_unresolved_put_returns_all_occurrences_in_order_without_store_call(
 
     with TestClient(create_app(database_path)) as restarted:
         assert restarted.get("/v1/saved-pantry").json() == {
-            "pantry_items": [
-                {"ingredient_id": "eggs", "canonical_name": "eggs"}
-            ]
+            "pantry_items": [{"ingredient_id": "eggs", "canonical_name": "eggs"}]
         }
 ```
 
@@ -1406,8 +1421,7 @@ def replace_saved_pantry_route(
                 "message": "All pantry items must resolve before saving.",
                 "ingredient_resolution": {
                     "pantry_items": [
-                        resolution.model_dump(mode="json")
-                        for resolution in resolutions
+                        resolution.model_dump(mode="json") for resolution in resolutions
                     ]
                 },
             },
@@ -1455,10 +1469,13 @@ def test_put_saved_pantry_rejects_invalid_request_shape(
 def test_saved_pantry_survives_application_restart(tmp_path: Path) -> None:
     database_path = tmp_path / "pantrypilot.sqlite3"
     with TestClient(create_app(database_path)) as first:
-        assert first.put(
-            "/v1/saved-pantry",
-            json={"pantry_items": ["spinach", "egg"]},
-        ).status_code == 200
+        assert (
+            first.put(
+                "/v1/saved-pantry",
+                json={"pantry_items": ["spinach", "egg"]},
+            ).status_code
+            == 200
+        )
 
     with TestClient(create_app(database_path)) as restarted:
         assert restarted.get("/v1/saved-pantry").json() == {
@@ -1519,7 +1536,9 @@ VALID_SAVED_RANKING = {
 }
 
 
-def test_saved_ranking_accepts_exact_existing_constraints_without_pantry_items() -> None:
+def test_saved_ranking_accepts_exact_existing_constraints_without_pantry_items() -> (
+    None
+):
     request = SavedPantryRankingRequest(**VALID_SAVED_RANKING)
     assert request.model_dump() == VALID_SAVED_RANKING
 
@@ -1619,9 +1638,7 @@ def test_saved_ranking_returns_same_exact_absent_404(client: TestClient) -> None
 
 
 def test_saved_ranking_accepts_established_empty_pantry(client: TestClient) -> None:
-    assert client.put(
-        "/v1/saved-pantry", json={"pantry_items": []}
-    ).status_code == 200
+    assert client.put("/v1/saved-pantry", json={"pantry_items": []}).status_code == 200
 
     response = client.post(
         "/v1/saved-pantry/meal-rankings",
@@ -1639,22 +1656,29 @@ def test_saved_ranking_accepts_established_empty_pantry(client: TestClient) -> N
 def test_saved_ranking_rejects_pantry_items_and_inline_omission_stays_invalid(
     client: TestClient,
 ) -> None:
-    assert client.post(
-        "/v1/saved-pantry/meal-rankings",
-        json={**SAVED_RANKING_REQUEST, "pantry_items": ["eggs"]},
-    ).status_code == 422
-    assert client.post(
-        "/v1/meal-rankings",
-        json=SAVED_RANKING_REQUEST,
-    ).status_code == 422
+    assert (
+        client.post(
+            "/v1/saved-pantry/meal-rankings",
+            json={**SAVED_RANKING_REQUEST, "pantry_items": ["eggs"]},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/v1/meal-rankings",
+            json=SAVED_RANKING_REQUEST,
+        ).status_code
+        == 422
+    )
 
 
 def test_saved_ranking_preserves_fail_closed_unresolved_exclusions(
     client: TestClient,
 ) -> None:
-    assert client.put(
-        "/v1/saved-pantry", json={"pantry_items": ["eggs"]}
-    ).status_code == 200
+    assert (
+        client.put("/v1/saved-pantry", json={"pantry_items": ["eggs"]}).status_code
+        == 200
+    )
 
     response = client.post(
         "/v1/saved-pantry/meal-rankings",
@@ -1663,9 +1687,12 @@ def test_saved_ranking_preserves_fail_closed_unresolved_exclusions(
 
     assert response.status_code == 422
     assert response.json()["detail"]["type"] == "unresolved_excluded_ingredients"
-    assert response.json()["detail"]["ingredient_resolution"][
-        "excluded_ingredients"
-    ][0]["input"] == "groundnut"
+    assert (
+        response.json()["detail"]["ingredient_resolution"]["excluded_ingredients"][0][
+            "input"
+        ]
+        == "groundnut"
+    )
 ```
 
 - [ ] **Step 5: Run endpoint tests to prove RED**
@@ -1812,9 +1839,9 @@ def test_established_empty_pantry_has_complete_zero_coverage_parity(
     tmp_path: Path,
 ) -> None:
     with TestClient(create_app(tmp_path / "pantrypilot.sqlite3")) as client:
-        assert client.put(
-            "/v1/saved-pantry", json={"pantry_items": []}
-        ).status_code == 200
+        assert (
+            client.put("/v1/saved-pantry", json={"pantry_items": []}).status_code == 200
+        )
 
         body, _ = assert_complete_parity(client, [], CONSTRAINTS)
 
@@ -1827,9 +1854,10 @@ def test_established_empty_pantry_has_complete_zero_coverage_parity(
 def test_unresolved_exclusion_has_complete_fail_closed_parity(tmp_path: Path) -> None:
     constraints = {**CONSTRAINTS, "excluded_ingredients": ["groundnut"]}
     with TestClient(create_app(tmp_path / "pantrypilot.sqlite3")) as client:
-        assert client.put(
-            "/v1/saved-pantry", json={"pantry_items": ["egg"]}
-        ).status_code == 200
+        assert (
+            client.put("/v1/saved-pantry", json={"pantry_items": ["egg"]}).status_code
+            == 200
+        )
 
         saved, inline = assert_complete_parity(client, ["eggs"], constraints)
 
@@ -1849,10 +1877,13 @@ def test_physical_pantry_row_order_cannot_change_complete_ranking(
 ) -> None:
     database_path = tmp_path / "pantrypilot.sqlite3"
     with TestClient(create_app(database_path)) as client:
-        assert client.put(
-            "/v1/saved-pantry",
-            json={"pantry_items": ["black beans", "eggs", "spinach"]},
-        ).status_code == 200
+        assert (
+            client.put(
+                "/v1/saved-pantry",
+                json={"pantry_items": ["black beans", "eggs", "spinach"]},
+            ).status_code
+            == 200
+        )
         with sqlite3.connect(database_path) as connection:
             connection.execute("DELETE FROM saved_pantry_items")
             connection.executemany(
@@ -1893,9 +1924,10 @@ def test_saved_ranking_preserves_recipe_id_tie_break_limit_and_count(
     constraints = {**CONSTRAINTS, "min_protein_g": 20.0, "limit": 1}
 
     with TestClient(create_app(database_path)) as client:
-        assert client.put(
-            "/v1/saved-pantry", json={"pantry_items": ["egg"]}
-        ).status_code == 200
+        assert (
+            client.put("/v1/saved-pantry", json={"pantry_items": ["egg"]}).status_code
+            == 200
+        )
 
         body, _ = assert_complete_parity(client, ["eggs"], constraints)
 
