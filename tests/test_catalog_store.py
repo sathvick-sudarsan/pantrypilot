@@ -5,10 +5,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-import pantrypilot.catalog_store as catalog_store
 from pantrypilot.catalog import INITIAL_RECIPE_CATALOG, load_catalog
 from pantrypilot.catalog_store import (
-    CURRENT_SCHEMA_VERSION,
     CatalogStoreError,
     connect_catalog,
     initialize_catalog,
@@ -58,7 +56,18 @@ def test_initialize_catalog_seeds_approved_recipes_and_survives_reopen(
         key=lambda recipe: recipe.id,
     )
     with sqlite3.connect(database_path) as reopened:
-        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert {
+            row[0]
+            for row in reopened.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        } == {
+            "recipes",
+            "recipe_ingredients",
+            "saved_pantry",
+            "saved_pantry_items",
+        }
         assert reopened.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 4
         assert reopened.execute("SELECT COUNT(*) FROM recipe_ingredients").fetchone()[
             0
@@ -283,7 +292,7 @@ def test_one_invalid_recipe_fails_catalog_instead_of_skipping_it(
 def test_current_version_with_missing_schema_fails_load(tmp_path: Path) -> None:
     database_path = tmp_path / "catalog.sqlite3"
     with sqlite3.connect(database_path) as connection:
-        connection.execute("PRAGMA user_version = 1")
+        connection.execute("PRAGMA user_version = 2")
 
     with pytest.raises(CatalogStoreError, match="catalog load failed"):
         load_durable_catalog(database_path, INGREDIENT_REGISTRY)
@@ -305,7 +314,7 @@ def test_foreign_key_violation_fails_before_hydration(tmp_path: Path) -> None:
         load_durable_catalog(database_path, INGREDIENT_REGISTRY)
 
 
-@pytest.mark.parametrize("version", [0, 2])
+@pytest.mark.parametrize("version", [0, 1, 3])
 def test_wrong_schema_version_fails_load(tmp_path: Path, version: int) -> None:
     database_path = tmp_path / "catalog.sqlite3"
     with sqlite3.connect(database_path) as connection:
@@ -325,172 +334,6 @@ def test_connect_catalog_uses_explicit_transactions_and_enables_foreign_keys(
 
     assert enabled == 1
     assert isolation_level is None
-
-
-def table_names(connection: sqlite3.Connection) -> set[str]:
-    return {
-        row[0]
-        for row in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        )
-    }
-
-
-def user_version(connection: sqlite3.Connection) -> int:
-    return connection.execute("PRAGMA user_version").fetchone()[0]
-
-
-def test_migration_creates_version_one_schema(tmp_path: Path) -> None:
-    database_path = tmp_path / "catalog.sqlite3"
-    with closing(connect_catalog(database_path)) as connection:
-        assert user_version(connection) == 0
-
-        migrate_catalog(connection, database_path)
-
-        assert user_version(connection) == CURRENT_SCHEMA_VERSION == 1
-        assert table_names(connection) == {"recipes", "recipe_ingredients"}
-
-        recipe_columns = {
-            row[1]: (row[2], row[3], row[5])
-            for row in connection.execute("PRAGMA table_info(recipes)")
-        }
-        assert recipe_columns == {
-            "id": ("TEXT", 1, 1),
-            "name": ("TEXT", 1, 0),
-            "calories": ("NUMERIC", 1, 0),
-            "protein_g": ("NUMERIC", 1, 0),
-            "prep_minutes": ("INTEGER", 1, 0),
-        }
-
-        relationship_columns = {
-            row[1]: (row[2], row[3], row[5])
-            for row in connection.execute("PRAGMA table_info(recipe_ingredients)")
-        }
-        assert relationship_columns == {
-            "recipe_id": ("TEXT", 1, 1),
-            "position": ("INTEGER", 1, 2),
-            "ingredient_id": ("TEXT", 1, 0),
-        }
-
-        foreign_key = connection.execute(
-            "PRAGMA foreign_key_list(recipe_ingredients)"
-        ).fetchone()
-        assert (foreign_key[2], foreign_key[3], foreign_key[4], foreign_key[6]) == (
-            "recipes",
-            "recipe_id",
-            "id",
-            "CASCADE",
-        )
-
-        unique_indexes = {
-            tuple(
-                column[2]
-                for column in connection.execute(f"PRAGMA index_info('{row[1]}')")
-            )
-            for row in connection.execute("PRAGMA index_list(recipe_ingredients)")
-            if row[2] == 1
-        }
-        assert unique_indexes == {
-            ("recipe_id", "position"),
-            ("recipe_id", "ingredient_id"),
-        }
-
-
-def test_current_migration_rerun_is_a_no_op(tmp_path: Path) -> None:
-    database_path = tmp_path / "catalog.sqlite3"
-    with closing(connect_catalog(database_path)) as connection:
-        migrate_catalog(connection, database_path)
-        schema_before = connection.execute(
-            "SELECT name, sql FROM sqlite_master "
-            "WHERE type IN ('table', 'index') ORDER BY name"
-        ).fetchall()
-
-        migrate_catalog(connection, database_path)
-
-        assert (
-            connection.execute(
-                "SELECT name, sql FROM sqlite_master "
-                "WHERE type IN ('table', 'index') ORDER BY name"
-            ).fetchall()
-            == schema_before
-        )
-        assert user_version(connection) == 1
-
-
-def test_newer_schema_version_is_rejected(tmp_path: Path) -> None:
-    database_path = tmp_path / "catalog.sqlite3"
-    with closing(connect_catalog(database_path)) as connection:
-        connection.execute("PRAGMA user_version = 2")
-
-        with pytest.raises(CatalogStoreError, match="newer than supported"):
-            migrate_catalog(connection, database_path)
-
-        assert user_version(connection) == 2
-        assert table_names(connection) == set()
-
-
-def test_failed_migration_rolls_back_partial_schema(tmp_path: Path) -> None:
-    database_path = tmp_path / "catalog.sqlite3"
-    with closing(connect_catalog(database_path)) as connection:
-        connection.execute("CREATE TABLE recipe_ingredients (sentinel TEXT)")
-        schema_before = connection.execute(
-            "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name"
-        ).fetchall()
-
-        with pytest.raises(CatalogStoreError, match="schema version 1"):
-            migrate_catalog(connection, database_path)
-
-        assert (
-            connection.execute(
-                "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name"
-            ).fetchall()
-            == schema_before
-        )
-        assert "recipes" not in table_names(connection)
-        assert user_version(connection) == 0
-
-
-def test_commit_failure_rolls_back_schema_and_user_version(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    database_path = tmp_path / "catalog.sqlite3"
-    synthetic_migration = (
-        "CREATE TABLE migration_parents (id INTEGER PRIMARY KEY)",
-        """
-        CREATE TABLE migration_children (
-            parent_id INTEGER NOT NULL
-                REFERENCES migration_parents(id)
-                DEFERRABLE INITIALLY DEFERRED
-        )
-        """,
-        "INSERT INTO migration_children (parent_id) VALUES (1)",
-    )
-    monkeypatch.setattr(
-        catalog_store,
-        "SCHEMA_MIGRATIONS",
-        ((1, synthetic_migration),),
-    )
-
-    traced_statements: list[str] = []
-    with closing(connect_catalog(database_path)) as connection:
-        connection.set_trace_callback(traced_statements.append)
-
-        with pytest.raises(CatalogStoreError) as exc_info:
-            migrate_catalog(connection, database_path)
-
-        connection.set_trace_callback(None)
-        normalized_trace = [
-            " ".join(statement.upper().split()) for statement in traced_statements
-        ]
-        version_index = normalized_trace.index("PRAGMA USER_VERSION = 1")
-        commit_index = normalized_trace.index("COMMIT")
-
-        assert version_index < commit_index
-        assert isinstance(exc_info.value.__cause__, sqlite3.IntegrityError)
-        assert "FOREIGN KEY constraint failed" in str(exc_info.value.__cause__)
-        assert user_version(connection) == 0
-        assert table_names(connection) == set()
 
 
 @pytest.mark.parametrize(

@@ -135,7 +135,7 @@ def test_incomplete_current_schema_prevents_startup_without_seed_fallback(
 ) -> None:
     database_path = tmp_path / "catalog.sqlite3"
     with sqlite3.connect(database_path) as connection:
-        connection.execute("PRAGMA user_version = 1")
+        connection.execute("PRAGMA user_version = 2")
 
     with pytest.raises(CatalogStoreError):
         with TestClient(create_app(database_path)):
