@@ -20,6 +20,13 @@ def initialized_database(tmp_path: Path) -> Path:
     return database_path
 
 
+def immediate_timeout_connection(database_path: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(database_path, isolation_level=None, timeout=0)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
 def test_load_distinguishes_absent_from_deliberately_empty(tmp_path: Path) -> None:
     pantry_store = pantry_store_module()
     database_path = initialized_database(tmp_path)
@@ -176,3 +183,74 @@ def test_missing_runtime_schema_fails_deterministically(tmp_path: Path) -> None:
 
     with pytest.raises(pantry_store.PantryStoreError, match="schema version"):
         pantry_store.load_saved_pantry(database_path, INGREDIENT_REGISTRY)
+
+
+def test_failed_replacement_rolls_back_marker_and_items(tmp_path: Path) -> None:
+    pantry_store = pantry_store_module()
+    database_path = initialized_database(tmp_path)
+    pantry_store.replace_saved_pantry(database_path, ["eggs"], INGREDIENT_REGISTRY)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER reject_spinach
+            BEFORE INSERT ON saved_pantry_items
+            WHEN NEW.ingredient_id = 'spinach'
+            BEGIN
+                SELECT RAISE(ABORT, 'synthetic replacement failure');
+            END
+            """
+        )
+
+    with pytest.raises(pantry_store.PantryStoreError) as exc_info:
+        pantry_store.replace_saved_pantry(
+            database_path,
+            ["black-beans", "spinach"],
+            INGREDIENT_REGISTRY,
+        )
+
+    assert isinstance(exc_info.value.__cause__, sqlite3.IntegrityError)
+    assert pantry_store.load_saved_pantry(database_path, INGREDIENT_REGISTRY) == (
+        "eggs",
+    )
+
+
+def test_real_write_lock_preserves_state_and_later_replacement_is_visible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pantry_store = pantry_store_module()
+    database_path = initialized_database(tmp_path)
+    pantry_store.replace_saved_pantry(database_path, ["eggs"], INGREDIENT_REGISTRY)
+    blocker = sqlite3.connect(database_path, isolation_level=None)
+    blocker.execute("BEGIN IMMEDIATE")
+    monkeypatch.setattr(
+        pantry_store,
+        "connect_database",
+        immediate_timeout_connection,
+    )
+
+    try:
+        with pytest.raises(pantry_store.PantryStoreError) as exc_info:
+            pantry_store.replace_saved_pantry(
+                database_path,
+                ["spinach"],
+                INGREDIENT_REGISTRY,
+            )
+        assert isinstance(exc_info.value.__cause__, sqlite3.OperationalError)
+        assert "database is locked" in str(exc_info.value.__cause__)
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    assert pantry_store.load_saved_pantry(database_path, INGREDIENT_REGISTRY) == (
+        "eggs",
+    )
+    assert pantry_store.replace_saved_pantry(
+        database_path,
+        ["black-beans", "spinach"],
+        INGREDIENT_REGISTRY,
+    ) == ("black-beans", "spinach")
+    assert pantry_store.load_saved_pantry(database_path, INGREDIENT_REGISTRY) == (
+        "black-beans",
+        "spinach",
+    )
