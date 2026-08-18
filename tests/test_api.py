@@ -833,6 +833,10 @@ def test_corrupt_saved_pantry_does_not_block_inline_ranking_after_restart(
         connection.execute("INSERT INTO saved_pantry_items VALUES (1, 'eggs')")
 
     with TestClient(create_app(database_path), raise_server_exceptions=False) as client:
+        replacement = client.put(
+            "/v1/saved-pantry",
+            json={"pantry_items": ["spinach"]},
+        )
         inline = client.post("/v1/meal-rankings", json=VALID_REQUEST)
         saved_get = client.get("/v1/saved-pantry")
         saved_ranking = client.post(
@@ -841,9 +845,15 @@ def test_corrupt_saved_pantry_does_not_block_inline_ranking_after_restart(
         )
 
     assert inline.status_code == 200
-    assert saved_get.status_code == saved_ranking.status_code == 503
     assert (
-        saved_get.json()
+        replacement.status_code
+        == saved_get.status_code
+        == saved_ranking.status_code
+        == 503
+    )
+    assert (
+        replacement.json()
+        == saved_get.json()
         == saved_ranking.json()
         == {
             "detail": {
@@ -852,6 +862,12 @@ def test_corrupt_saved_pantry_does_not_block_inline_ranking_after_restart(
             }
         }
     )
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT id FROM saved_pantry").fetchall() == []
+        assert connection.execute(
+            "SELECT pantry_id, ingredient_id FROM saved_pantry_items "
+            "ORDER BY ingredient_id"
+        ).fetchall() == [(1, "eggs")]
 
 
 def test_saved_ranking_returns_same_exact_absent_404(client: TestClient) -> None:

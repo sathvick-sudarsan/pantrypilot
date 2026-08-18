@@ -39,6 +39,38 @@ def _require_current_schema(connection: sqlite3.Connection) -> None:
         )
 
 
+def _load_validated_saved_pantry(
+    connection: sqlite3.Connection,
+    ingredient_registry: IngredientRegistry,
+) -> tuple[str, ...] | None:
+    if (
+        connection.execute("PRAGMA foreign_key_check(saved_pantry_items)").fetchone()
+        is not None
+    ):
+        raise PantryStoreError("saved pantry foreign key integrity failed")
+    marker_rows = connection.execute(
+        "SELECT id FROM saved_pantry ORDER BY id"
+    ).fetchall()
+    item_rows = connection.execute(
+        "SELECT pantry_id, ingredient_id FROM saved_pantry_items ORDER BY ingredient_id"
+    ).fetchall()
+    if not marker_rows:
+        if item_rows:
+            raise PantryStoreError("saved pantry items have no marker")
+        return None
+    if [row["id"] for row in marker_rows] != [1]:
+        raise PantryStoreError("saved pantry marker is malformed")
+    if any(row["pantry_id"] != 1 for row in item_rows):
+        raise PantryStoreError("saved pantry item marker is malformed")
+    canonical_ids = _validated_ids(
+        (row["ingredient_id"] for row in item_rows),
+        ingredient_registry,
+    )
+    if len(canonical_ids) != len(item_rows):
+        raise PantryStoreError("saved pantry contains duplicate items")
+    return canonical_ids
+
+
 def replace_saved_pantry(
     database_path: Path,
     ingredient_ids: Iterable[str],
@@ -50,6 +82,7 @@ def replace_saved_pantry(
             _require_current_schema(connection)
             try:
                 connection.execute("BEGIN IMMEDIATE")
+                _load_validated_saved_pantry(connection, ingredient_registry)
                 connection.execute("DELETE FROM saved_pantry WHERE id = 1")
                 connection.execute("INSERT INTO saved_pantry (id) VALUES (1)")
                 connection.executemany(
@@ -58,7 +91,7 @@ def replace_saved_pantry(
                     ((ingredient_id,) for ingredient_id in canonical_ids),
                 )
                 connection.commit()
-            except sqlite3.Error:
+            except (PantryStoreError, sqlite3.Error):
                 connection.rollback()
                 raise
     except PantryStoreError:
@@ -77,35 +110,10 @@ def load_saved_pantry(
             try:
                 connection.execute("BEGIN")
                 _require_current_schema(connection)
-                if (
-                    connection.execute(
-                        "PRAGMA foreign_key_check(saved_pantry_items)"
-                    ).fetchone()
-                    is not None
-                ):
-                    raise PantryStoreError("saved pantry foreign key integrity failed")
-                marker_rows = connection.execute(
-                    "SELECT id FROM saved_pantry ORDER BY id"
-                ).fetchall()
-                item_rows = connection.execute(
-                    "SELECT pantry_id, ingredient_id FROM saved_pantry_items "
-                    "ORDER BY ingredient_id"
-                ).fetchall()
-                if not marker_rows:
-                    if item_rows:
-                        raise PantryStoreError("saved pantry items have no marker")
-                    connection.commit()
-                    return None
-                if [row["id"] for row in marker_rows] != [1]:
-                    raise PantryStoreError("saved pantry marker is malformed")
-                if any(row["pantry_id"] != 1 for row in item_rows):
-                    raise PantryStoreError("saved pantry item marker is malformed")
-                canonical_ids = _validated_ids(
-                    (row["ingredient_id"] for row in item_rows),
+                canonical_ids = _load_validated_saved_pantry(
+                    connection,
                     ingredient_registry,
                 )
-                if len(canonical_ids) != len(item_rows):
-                    raise PantryStoreError("saved pantry contains duplicate items")
                 connection.commit()
                 return canonical_ids
             except (PantryStoreError, sqlite3.Error):
