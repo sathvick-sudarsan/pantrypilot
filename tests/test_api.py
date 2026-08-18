@@ -823,6 +823,37 @@ def test_saved_pantry_survives_application_restart(tmp_path: Path) -> None:
         }
 
 
+def test_corrupt_saved_pantry_does_not_block_inline_ranking_after_restart(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "pantrypilot.sqlite3"
+    with TestClient(create_app(database_path)):
+        pass
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("INSERT INTO saved_pantry_items VALUES (1, 'eggs')")
+
+    with TestClient(create_app(database_path), raise_server_exceptions=False) as client:
+        inline = client.post("/v1/meal-rankings", json=VALID_REQUEST)
+        saved_get = client.get("/v1/saved-pantry")
+        saved_ranking = client.post(
+            "/v1/saved-pantry/meal-rankings",
+            json=SAVED_RANKING_REQUEST,
+        )
+
+    assert inline.status_code == 200
+    assert saved_get.status_code == saved_ranking.status_code == 503
+    assert (
+        saved_get.json()
+        == saved_ranking.json()
+        == {
+            "detail": {
+                "type": "saved_pantry_unavailable",
+                "message": "Saved pantry is unavailable.",
+            }
+        }
+    )
+
+
 def test_saved_ranking_returns_same_exact_absent_404(client: TestClient) -> None:
     response = client.post(
         "/v1/saved-pantry/meal-rankings",

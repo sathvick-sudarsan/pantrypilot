@@ -47,7 +47,10 @@ def seed_catalog(
     seed_records: Iterable[Mapping[str, object]],
     ingredient_registry: IngredientRegistry,
 ) -> None:
-    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+    if (
+        connection.execute("PRAGMA foreign_key_check(recipe_ingredients)").fetchone()
+        is not None
+    ):
         raise CatalogStoreError(
             f"catalog is partially initialized at '{database_path}': "
             "foreign-key violations exist"
@@ -140,11 +143,22 @@ def load_durable_catalog(
                     f"does not match supported version {CURRENT_SCHEMA_VERSION}"
                 )
 
-            if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            if (
+                connection.execute("PRAGMA quick_check(recipes)").fetchone()[0] != "ok"
+                or connection.execute(
+                    "PRAGMA quick_check(recipe_ingredients)"
+                ).fetchone()[0]
+                != "ok"
+            ):
                 raise CatalogStoreError(
                     f"catalog integrity check failed for '{database_path}'"
                 )
-            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            if (
+                connection.execute(
+                    "PRAGMA foreign_key_check(recipe_ingredients)"
+                ).fetchone()
+                is not None
+            ):
                 raise CatalogStoreError(
                     f"catalog foreign-key check failed for '{database_path}'"
                 )

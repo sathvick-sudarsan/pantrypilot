@@ -32,9 +32,9 @@ uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.jso
 PantryPilot stores recipes in a local SQLite file. On startup it migrates a
 fresh store, seeds the approved four recipes only when both catalog tables are
 empty, reloads the complete catalog as validated immutable `Recipe` objects,
-and serves ranking requests from that in-memory snapshot. Ranking requests do
-not query SQLite, and startup never falls back to Python seed data after a
-storage failure.
+and serves inline ranking requests from that in-memory snapshot. Inline ranking
+has no request-time SQLite I/O; saved ranking performs one durable pantry read.
+Startup never falls back to Python seed data after a storage failure.
 
 PantryPilot keeps one application-local current pantry in the same SQLite
 database as the durable recipe catalog. Saved pantry state contains only
