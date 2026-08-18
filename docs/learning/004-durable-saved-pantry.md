@@ -166,6 +166,13 @@ An unresolved replacement returns `422` and preserves the prior state:
     "ingredient_resolution": {
       "pantry_items": [
         {
+          "input": "egg",
+          "normalized": "egg",
+          "ingredient_id": "eggs",
+          "canonical_name": "eggs",
+          "match_type": "alias"
+        },
+        {
           "input": "groundnut",
           "normalized": "groundnut",
           "ingredient_id": null,
