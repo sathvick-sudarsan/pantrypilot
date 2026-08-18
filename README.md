@@ -13,10 +13,10 @@ a recipe chatbot or external-API wrapper.
 
 ## Current status
 
-**Feature 003: Durable Recipe Catalog** is implemented. Recipes now load from a
-versioned local SQLite store into an immutable startup snapshot. The existing
-deterministic ingredient-resolution and ranking behavior is unchanged, and the
-Feature 002 evaluation remains database-independent.
+**Feature 004: Durable Saved Pantry** is implemented. Recipes and one current
+application-local pantry are durable in a versioned local SQLite store. Recipe
+ranking remains deterministic, and the Feature 002 evaluation remains
+database-independent.
 
 ## Quick start
 
@@ -27,7 +27,7 @@ uv run uvicorn pantrypilot.app:app --app-dir src
 uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
 ```
 
-## Durable recipe catalog
+## Durable catalog and saved pantry
 
 PantryPilot stores recipes in a local SQLite file. On startup it migrates a
 fresh store, seeds the approved four recipes only when both catalog tables are
@@ -35,6 +35,11 @@ empty, reloads the complete catalog as validated immutable `Recipe` objects,
 and serves ranking requests from that in-memory snapshot. Ranking requests do
 not query SQLite, and startup never falls back to Python seed data after a
 storage failure.
+
+PantryPilot keeps one application-local current pantry in the same SQLite
+database as the durable recipe catalog. Saved pantry state contains only
+canonical ingredient IDs; canonical names are derived from the code-owned
+ingredient registry. Inline ranking remains available and unchanged.
 
 The default file is `pantrypilot.sqlite3` in the process working directory.
 Override it on PowerShell with:
@@ -49,12 +54,95 @@ be absent; PantryPilot creates it on successful first startup, but it does not
 create missing parent directories.
 
 Automatic startup migration and seeding assume PantryPilot's current
-single-process deployment. Coordination for concurrent or multi-worker startup
-is deferred rather than implemented in Feature 003.
+single-process deployment. SQLite persistence and saved-pantry writes are local
+to that deployment; multi-worker coordination is deferred.
 
 Stop the application before moving or deleting the local database. Deleting a
 development database is an explicit reset: the next successful startup creates
 and seeds a fresh store. Never commit the database file.
+
+## Saved-pantry API
+
+All saved-pantry items resolve through the code-owned ingredient registry. A
+successful replacement deduplicates them and returns ascending canonical-ID
+order. An empty list establishes an empty pantry; it does not mean absent.
+If any submitted item is unresolved, the whole replacement is rejected and the
+previous saved pantry stays unchanged.
+
+- `PUT /v1/saved-pantry` — replace the complete current pantry.
+
+  ```json
+  {"pantry_items": ["black bean", "eggs", "olive oil"]}
+  ```
+
+- `GET /v1/saved-pantry` — inspect the established pantry.
+
+- `POST /v1/saved-pantry/meal-rankings` — rank with saved state.
+
+  ```json
+  {
+    "min_protein_g": 20.0,
+    "max_prep_minutes": 30,
+    "excluded_ingredients": [],
+    "limit": 5
+  }
+  ```
+
+- `POST /v1/meal-rankings` — rank with required inline `pantry_items`.
+
+  ```json
+  {
+    "pantry_items": ["black beans", "eggs", "olive oil"],
+    "min_protein_g": 20.0,
+    "max_prep_minutes": 30,
+    "excluded_ingredients": [],
+    "limit": 5
+  }
+  ```
+
+An absent saved pantry returns `404`:
+
+```json
+{
+  "detail": {
+    "type": "saved_pantry_not_found",
+    "message": "No saved pantry has been established."
+  }
+}
+```
+
+An unresolved replacement returns `422` without writing any submitted item:
+
+```json
+{
+  "detail": {
+    "type": "unresolved_pantry_items",
+    "message": "All pantry items must resolve before saving.",
+    "ingredient_resolution": {
+      "pantry_items": [
+        {
+          "input": "groundnut",
+          "normalized": "groundnut",
+          "ingredient_id": null,
+          "canonical_name": null,
+          "match_type": "unresolved"
+        }
+      ]
+    }
+  }
+}
+```
+
+Known saved-pantry storage failures return `503` without paths or SQL details:
+
+```json
+{
+  "detail": {
+    "type": "saved_pantry_unavailable",
+    "message": "Saved pantry is unavailable."
+  }
+}
+```
 
 ## Project documents
 
@@ -66,6 +154,8 @@ and seeds a fresh store. Never commit the database file.
 - [Feature 002 learning guide](docs/learning/002-ingredient-entity-resolution.md)
 - [Feature 003 design](docs/superpowers/specs/2026-08-15-durable-recipe-catalog-design.md)
 - [Feature 003 learning guide](docs/learning/003-durable-recipe-catalog.md)
+- [Feature 004 design](docs/superpowers/specs/2026-08-16-durable-saved-pantry-design.md)
+- [Feature 004 learning guide](docs/learning/004-durable-saved-pantry.md)
 - [Contributor instructions](AGENTS.md)
 
 ## Engineering workflow
