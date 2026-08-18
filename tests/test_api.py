@@ -13,6 +13,7 @@ import pantrypilot.app as app_module
 from pantrypilot.app import create_app
 from pantrypilot.catalog_store import CatalogStoreError
 from pantrypilot.models import Recipe
+from pantrypilot.pantry_store import PantryStoreError
 
 
 @pytest.fixture
@@ -611,3 +612,205 @@ def test_meal_rankings_rejects_unknown_request_fields(client):
         "msg": "Extra inputs are not permitted",
         "input": "future",
     }
+
+
+def test_get_saved_pantry_returns_exact_absent_404(client: TestClient) -> None:
+    response = client.get("/v1/saved-pantry")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": {
+            "type": "saved_pantry_not_found",
+            "message": "No saved pantry has been established.",
+        }
+    }
+
+
+def test_put_establishes_empty_saved_pantry(client: TestClient) -> None:
+    put_response = client.put("/v1/saved-pantry", json={"pantry_items": []})
+    get_response = client.get("/v1/saved-pantry")
+
+    assert put_response.status_code == get_response.status_code == 200
+    assert put_response.json() == get_response.json() == {"pantry_items": []}
+
+
+def test_put_resolves_deduplicates_replaces_and_orders_canonical_items(
+    client: TestClient,
+) -> None:
+    first = client.put(
+        "/v1/saved-pantry",
+        json={"pantry_items": ["spinach", "egg", "Eggs", "spinach"]},
+    )
+    second = client.put(
+        "/v1/saved-pantry",
+        json={"pantry_items": ["black bean", "olive oil"]},
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == {
+        "pantry_items": [
+            {"ingredient_id": "eggs", "canonical_name": "eggs"},
+            {"ingredient_id": "spinach", "canonical_name": "spinach"},
+        ]
+    }
+    assert second.json() == {
+        "pantry_items": [
+            {"ingredient_id": "black-beans", "canonical_name": "black beans"},
+            {"ingredient_id": "olive-oil", "canonical_name": "olive oil"},
+        ]
+    }
+    assert client.get("/v1/saved-pantry").json() == second.json()
+
+
+def test_equivalent_puts_are_idempotent_by_canonical_id_set(client: TestClient) -> None:
+    first = client.put(
+        "/v1/saved-pantry",
+        json={"pantry_items": ["egg", "spinach", "egg"]},
+    )
+    second = client.put(
+        "/v1/saved-pantry",
+        json={"pantry_items": ["spinach", "eggs"]},
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+
+
+def test_unresolved_put_returns_all_occurrences_in_order_without_store_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "pantrypilot.sqlite3"
+    with TestClient(create_app(database_path)) as client:
+        established = client.put(
+            "/v1/saved-pantry",
+            json={"pantry_items": ["eggs"]},
+        )
+        assert established.status_code == 200
+        calls = 0
+
+        def forbidden_store_call(*_args: object, **_kwargs: object) -> tuple[str, ...]:
+            nonlocal calls
+            calls += 1
+            raise AssertionError("unresolved replacement reached storage")
+
+        monkeypatch.setattr(app_module, "replace_saved_pantry", forbidden_store_call)
+        response = client.put(
+            "/v1/saved-pantry",
+            json={"pantry_items": ["egg", "mystery", "eggs", "unknown"]},
+        )
+
+        assert response.status_code == 422
+        assert response.json() == {
+            "detail": {
+                "type": "unresolved_pantry_items",
+                "message": "All pantry items must resolve before saving.",
+                "ingredient_resolution": {
+                    "pantry_items": [
+                        {
+                            "input": "egg",
+                            "normalized": "egg",
+                            "ingredient_id": "eggs",
+                            "canonical_name": "eggs",
+                            "match_type": "alias",
+                        },
+                        {
+                            "input": "mystery",
+                            "normalized": "mystery",
+                            "ingredient_id": None,
+                            "canonical_name": None,
+                            "match_type": "unresolved",
+                        },
+                        {
+                            "input": "eggs",
+                            "normalized": "eggs",
+                            "ingredient_id": "eggs",
+                            "canonical_name": "eggs",
+                            "match_type": "canonical",
+                        },
+                        {
+                            "input": "unknown",
+                            "normalized": "unknown",
+                            "ingredient_id": None,
+                            "canonical_name": None,
+                            "match_type": "unresolved",
+                        },
+                    ]
+                },
+            }
+        }
+        assert calls == 0
+
+    with TestClient(create_app(database_path)) as restarted:
+        assert restarted.get("/v1/saved-pantry").json() == {
+            "pantry_items": [{"ingredient_id": "eggs", "canonical_name": "eggs"}]
+        }
+
+
+def test_known_saved_pantry_failure_returns_safe_exact_503(
+    safe_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_read(*_args: object, **_kwargs: object) -> None:
+        raise PantryStoreError("C:\\private\\pantry.sqlite3: SQL secret")
+
+    monkeypatch.setattr(app_module, "load_saved_pantry", fail_read)
+
+    response = safe_client.get("/v1/saved-pantry")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "type": "saved_pantry_unavailable",
+            "message": "Saved pantry is unavailable.",
+        }
+    }
+    assert "private" not in response.text
+    assert "SQL" not in response.text
+
+
+def test_unexpected_saved_pantry_programming_error_remains_generic_500(
+    safe_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def programming_error(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("private programmer defect")
+
+    monkeypatch.setattr(app_module, "load_saved_pantry", programming_error)
+
+    response = safe_client.get("/v1/saved-pantry")
+
+    assert response.status_code == 500
+    assert "saved_pantry_unavailable" not in response.text
+    assert "private programmer defect" not in response.text
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{}, {"pantry_items": [], "owner": "future-user"}],
+)
+def test_put_saved_pantry_rejects_invalid_request_shape(
+    client: TestClient,
+    body: dict[str, object],
+) -> None:
+    assert client.put("/v1/saved-pantry", json=body).status_code == 422
+
+
+def test_saved_pantry_survives_application_restart(tmp_path: Path) -> None:
+    database_path = tmp_path / "pantrypilot.sqlite3"
+    with TestClient(create_app(database_path)) as first:
+        assert (
+            first.put(
+                "/v1/saved-pantry",
+                json={"pantry_items": ["spinach", "egg"]},
+            ).status_code
+            == 200
+        )
+
+    with TestClient(create_app(database_path)) as restarted:
+        assert restarted.get("/v1/saved-pantry").json() == {
+            "pantry_items": [
+                {"ingredient_id": "eggs", "canonical_name": "eggs"},
+                {"ingredient_id": "spinach", "canonical_name": "spinach"},
+            ]
+        }

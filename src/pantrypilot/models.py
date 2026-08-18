@@ -11,6 +11,34 @@ from pydantic import (
 
 from pantrypilot.ingredients import IngredientResolutionEvidence
 
+SavedPantryText = Annotated[str, Field(max_length=100)]
+
+
+class SavedPantryWriteRequest(BaseModel):
+    pantry_items: Annotated[list[SavedPantryText], Field(max_length=100)]
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("pantry_items")
+    @classmethod
+    def reject_blank_pantry_items(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("pantry items must not be blank")
+        return values
+
+
+class SavedPantryItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ingredient_id: str
+    canonical_name: str
+
+
+class SavedPantryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pantry_items: tuple[SavedPantryItem, ...]
+
 
 class RankingRequest(BaseModel):
     pantry_items: list[str]
