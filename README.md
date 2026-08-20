@@ -144,6 +144,10 @@ Known saved-pantry storage failures return `503` without paths or SQL details:
 }
 ```
 
+Corrupt saved-pantry state or durable ingredient IDs that are no longer
+recognized fail closed with `503 saved_pantry_unavailable`. Feature 004 does
+not expose an API repair/reset operation, and `PUT` is not an implicit repair.
+
 ## Project documents
 
 - [Product vision](docs/product/vision.md)

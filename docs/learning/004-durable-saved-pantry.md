@@ -89,15 +89,33 @@ returns any state.
 ## Write transaction
 
 Resolution and input validation happen before opening a database connection.
-For an all-resolved replacement, the store uses one short transaction:
+For an all-resolved replacement, the store uses one short transaction and
+validates the current durable pantry before destructive replacement:
 
 ```text
-BEGIN IMMEDIATE -> DELETE -> INSERT marker -> INSERT sorted IDs -> COMMIT
+validated and resolved canonical IDs
+  -> open connection
+  -> require schema v2
+  -> BEGIN IMMEDIATE
+  -> validate the current marker, items, foreign key, and registry IDs
+     -> if corrupt: PantryStoreError -> ROLLBACK -> safe 503, no repair or mutation
+  -> DELETE old valid marker and items
+  -> INSERT marker
+  -> INSERT sorted canonical IDs
+  -> COMMIT
 ```
 
-Deleting the marker cascades old items. If any statement or the commit fails,
-rollback retains the complete prior marker and item set. This is why a mixed
-valid/unresolved request changes nothing: it never reaches the store.
+The pre-replacement guard prevents corrupt rows from being silently adopted.
+For example, if an out-of-band write left a `saved_pantry_items` row without a
+marker, deleting marker `1` would remove nothing. Inserting a new marker `1`
+could then accidentally re-parent that orphan into the replacement. Feature
+004 instead fails closed and leaves the corrupt rows unchanged; `PUT` is not an
+implicit repair operation.
+
+For valid state, deleting the marker cascades old items. If any later statement
+or the commit fails, rollback retains the complete prior marker and item set.
+A mixed valid/unresolved request changes nothing because it never reaches the
+store.
 
 ## Read transaction and integrity
 
@@ -195,6 +213,14 @@ A known pantry-store failure returns `503`:
   }
 }
 ```
+
+Corrupt saved-pantry state, including a durable ingredient ID no longer known
+to the code-owned registry, can make `GET`, `PUT`, and saved-pantry ranking
+return this `saved_pantry_unavailable` response. Feature 004 has no public
+repair or reset endpoint, and replacement does not repair corrupt state.
+Recovery from genuinely corrupt local persistence is an operator concern
+outside this public API, or requires a future explicitly designed recovery
+capability.
 
 Only `PantryStoreError` owns that `503` mapping. Programmer defects keep the
 generic `500` path. Raw SQLite details are exception causes for diagnostics,
