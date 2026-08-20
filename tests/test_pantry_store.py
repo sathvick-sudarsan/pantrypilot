@@ -27,6 +27,19 @@ def immediate_timeout_connection(database_path: Path) -> sqlite3.Connection:
     return connection
 
 
+def saved_pantry_rows(
+    database_path: Path,
+) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
+    with sqlite3.connect(database_path) as connection:
+        return (
+            connection.execute("SELECT id FROM saved_pantry ORDER BY id").fetchall(),
+            connection.execute(
+                "SELECT pantry_id, ingredient_id FROM saved_pantry_items "
+                "ORDER BY pantry_id, ingredient_id"
+            ).fetchall(),
+        )
+
+
 def test_load_distinguishes_absent_from_deliberately_empty(tmp_path: Path) -> None:
     pantry_store = pantry_store_module()
     database_path = initialized_database(tmp_path)
@@ -37,6 +50,11 @@ def test_load_distinguishes_absent_from_deliberately_empty(tmp_path: Path) -> No
         pantry_store.replace_saved_pantry(database_path, [], INGREDIENT_REGISTRY) == ()
     )
     assert pantry_store.load_saved_pantry(database_path, INGREDIENT_REGISTRY) == ()
+    assert pantry_store.replace_saved_pantry(
+        database_path,
+        ["spinach"],
+        INGREDIENT_REGISTRY,
+    ) == ("spinach",)
 
 
 def test_replace_deduplicates_sorts_and_persists_across_reopen(tmp_path: Path) -> None:
@@ -173,6 +191,65 @@ def test_orphaned_item_fails_the_complete_read(tmp_path: Path) -> None:
 
     with pytest.raises(pantry_store.PantryStoreError, match="foreign key integrity"):
         pantry_store.load_saved_pantry(database_path, INGREDIENT_REGISTRY)
+
+
+@pytest.mark.parametrize(
+    ("setup_sql", "bypass_checks", "expected_rows"),
+    [
+        (
+            ("INSERT INTO saved_pantry_items VALUES (1, 'eggs')",),
+            False,
+            ([], [(1, "eggs")]),
+        ),
+        (
+            (
+                "INSERT INTO saved_pantry VALUES (1)",
+                "INSERT INTO saved_pantry_items VALUES (1, 'not-registered')",
+            ),
+            False,
+            ([(1,)], [(1, "not-registered")]),
+        ),
+        (
+            (
+                "INSERT INTO saved_pantry VALUES (1)",
+                "INSERT INTO saved_pantry_items VALUES (1, '   ')",
+            ),
+            True,
+            ([(1,)], [(1, "   ")]),
+        ),
+        (
+            ("INSERT INTO saved_pantry VALUES (2)",),
+            True,
+            ([(2,)], []),
+        ),
+    ],
+    ids=("orphan-item", "unknown-id", "blank-id", "malformed-marker"),
+)
+def test_replace_rejects_corrupt_state_without_adopting_or_repairing_rows(
+    tmp_path: Path,
+    setup_sql: tuple[str, ...],
+    bypass_checks: bool,
+    expected_rows: tuple[list[tuple[object, ...]], list[tuple[object, ...]]],
+) -> None:
+    pantry_store = pantry_store_module()
+    database_path = initialized_database(tmp_path)
+    with sqlite3.connect(database_path) as connection:
+        if bypass_checks:
+            connection.execute("PRAGMA ignore_check_constraints = ON")
+        for statement in setup_sql:
+            connection.execute(statement)
+
+    before = saved_pantry_rows(database_path)
+    assert before == expected_rows
+
+    with pytest.raises(pantry_store.PantryStoreError):
+        pantry_store.replace_saved_pantry(
+            database_path,
+            ["spinach"],
+            INGREDIENT_REGISTRY,
+        )
+
+    assert saved_pantry_rows(database_path) == before
 
 
 def test_missing_runtime_schema_fails_deterministically(tmp_path: Path) -> None:

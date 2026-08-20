@@ -203,6 +203,33 @@ def test_newer_schema_version_fails_without_mutation(tmp_path: Path) -> None:
         )
 
 
+def test_migration_one_ddl_conflict_rolls_back_first_table_and_keeps_v0(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "pantrypilot.sqlite3"
+    with closing(connect_database(database_path)) as connection:
+        connection.execute("CREATE TABLE recipe_ingredients (sentinel TEXT)")
+        sentinel_schema = connection.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'recipe_ingredients'"
+        ).fetchone()["sql"]
+
+        with pytest.raises(DatabaseError, match="schema version 1"):
+            migrate_database(connection, database_path)
+
+        assert user_version(connection) == 0
+        assert "recipes" not in table_names(connection)
+        assert (
+            connection.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'recipe_ingredients'"
+            ).fetchone()["sql"]
+            == sentinel_schema
+        )
+        assert "saved_pantry" not in table_names(connection)
+        assert "saved_pantry_items" not in table_names(connection)
+
+
 def test_migration_two_ddl_conflict_rolls_back_first_table_and_keeps_v1(
     tmp_path: Path,
 ) -> None:

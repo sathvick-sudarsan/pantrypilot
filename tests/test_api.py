@@ -641,6 +641,69 @@ def test_put_establishes_empty_saved_pantry(client: TestClient) -> None:
     assert put_response.json() == get_response.json() == {"pantry_items": []}
 
 
+def test_saved_pantry_put_accepts_one_hundred_occurrences_and_deduplicates(
+    client: TestClient,
+) -> None:
+    response = client.put(
+        "/v1/saved-pantry",
+        json={"pantry_items": ["eggs"] * 100},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "pantry_items": [{"ingredient_id": "eggs", "canonical_name": "eggs"}]
+    }
+
+
+def test_saved_pantry_put_accepts_one_hundred_characters_before_resolution(
+    client: TestClient,
+) -> None:
+    pantry_item = "x" * 100
+
+    response = client.put(
+        "/v1/saved-pantry",
+        json={"pantry_items": [pantry_item]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["type"] == "unresolved_pantry_items"
+    assert (
+        response.json()["detail"]["ingredient_resolution"]["pantry_items"][0]["input"]
+        == pantry_item
+    )
+
+
+@pytest.mark.parametrize(
+    "pantry_items",
+    [
+        ["eggs"] * 101,
+        ["x" * 101],
+        ["   "],
+    ],
+    ids=("one-hundred-one-occurrences", "one-hundred-one-characters", "blank"),
+)
+def test_saved_pantry_put_rejects_invalid_bounds_before_mutation(
+    client: TestClient,
+    pantry_items: list[str],
+) -> None:
+    established = client.put(
+        "/v1/saved-pantry",
+        json={"pantry_items": ["spinach"]},
+    )
+
+    response = client.put(
+        "/v1/saved-pantry",
+        json={"pantry_items": pantry_items},
+    )
+
+    assert established.status_code == 200
+    assert response.status_code == 422
+    assert "unresolved_pantry_items" not in response.text
+    assert client.get("/v1/saved-pantry").json() == {
+        "pantry_items": [{"ingredient_id": "spinach", "canonical_name": "spinach"}]
+    }
+
+
 def test_put_resolves_deduplicates_replaces_and_orders_canonical_items(
     client: TestClient,
 ) -> None:
