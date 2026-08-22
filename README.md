@@ -27,6 +27,34 @@ uv run uvicorn pantrypilot.app:app --app-dir src
 uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
 ```
 
+## Automated verification
+
+The committed `.github/workflows/ci.yml` configures GitHub to run the visible
+`PantryPilot verification` check for pull requests targeting `main` and pushes
+to `main`. Local inspection verifies the workflow's configured intent, but it
+cannot yet prove that GitHub recognizes or executes it; that requires a later
+owner-authorized hosted run.
+
+Run the authoritative verification contract locally before proposing a change:
+
+```powershell
+uv lock --check
+uv run pytest
+uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
+uv run ruff format --check src tests
+uv run ruff check src tests
+git diff --check
+```
+
+Windows remains supported for local development through this uv workflow.
+Feature 005 uses one `ubuntu-24.04` hosted verification target; that choice does
+not make PantryPilot Linux-only or establish Windows hosted compatibility.
+
+The configured check is visible evidence, not a required merge check. `main`
+remains unprotected unless repository governance is changed separately. Green
+CI does not prove deployment readiness, production correctness, broad security,
+Windows compatibility, or merge enforcement. No CI badge is included.
+
 ## Durable catalog and saved pantry
 
 PantryPilot stores recipes in a local SQLite file. On startup it migrates a
@@ -160,6 +188,8 @@ not expose an API repair/reset operation, and `PUT` is not an implicit repair.
 - [Feature 003 learning guide](docs/learning/003-durable-recipe-catalog.md)
 - [Feature 004 design](docs/superpowers/specs/2026-08-16-durable-saved-pantry-design.md)
 - [Feature 004 learning guide](docs/learning/004-durable-saved-pantry.md)
+- [Feature 005 design](docs/superpowers/specs/2026-08-20-automated-ci-verification-design.md)
+- [Feature 005 learning guide](docs/learning/005-automated-ci-verification.md)
 - [Contributor instructions](AGENTS.md)
 
 ## Engineering workflow
