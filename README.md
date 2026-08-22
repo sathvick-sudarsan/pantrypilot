@@ -13,10 +13,13 @@ a recipe chatbot or external-API wrapper.
 
 ## Current status
 
-**Feature 004: Durable Saved Pantry** is implemented. Recipes and one current
-application-local pantry are durable in a versioned local SQLite store. Recipe
-ranking remains deterministic, and the Feature 002 evaluation remains
-database-independent.
+**Feature 005: Automated CI Verification** is implemented. GitHub successfully
+executed `PantryPilot verification` for the Feature 005 pull request. The
+workflow is configured for pull requests targeting `main` and pushes to `main`;
+the PR-hosted path is verified, while the eventual push-to-main path remains
+unproven until merge. The check is visible but not required, and `main` remains
+unprotected unless repository governance is changed separately. No deployment
+behavior was added.
 
 ## Quick start
 
@@ -31,9 +34,9 @@ uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.jso
 
 The committed `.github/workflows/ci.yml` configures GitHub to run the visible
 `PantryPilot verification` check for pull requests targeting `main` and pushes
-to `main`. Local inspection verifies the workflow's configured intent, but it
-cannot yet prove that GitHub recognizes or executes it; that requires a later
-owner-authorized hosted run.
+to `main`. The owner-authorized Feature 005 PR run proves that GitHub recognizes
+and executes the pull-request path; the eventual push-to-main path remains
+unproven until merge.
 
 Run the authoritative verification contract locally before proposing a change:
 
