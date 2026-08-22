@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verification:
+    name: PantryPilot verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.32"
+          checksum: "aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967"
+          download-from-astral-mirror: false
+          enable-cache: false
+          cache-python: false
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Synchronize locked environment
+        run: uv sync --locked
+
+      - name: Record tool versions
+        run: |
+          uv --version
+          uv run python --version
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Evaluate ingredient resolution
+        run: uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
+
+      - name: Check formatting
+        run: uv run ruff format --check src tests
+
+      - name: Check lint
+        run: uv run ruff check src tests
+
+      - name: Check committed whitespace
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          TARGET_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readonly zero_sha='0000000000000000000000000000000000000000'
+          readonly sha_pattern='^[0-9a-f]{40}$'
+          base_kind='commit'
+
+          case "$EVENT_NAME" in
+            pull_request)
+              base_sha="$PR_BASE_SHA"
+              ;;
+            push)
+              if [[ "$PUSH_BEFORE_SHA" == "$zero_sha" ]]; then
+                base_sha="$(git hash-object -t tree /dev/null)"
+                base_kind='tree'
+              else
+                base_sha="$PUSH_BEFORE_SHA"
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported workflow event: $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
+          if [[ ! "$TARGET_SHA" =~ $sha_pattern ]]; then
+            echo "::error::Target SHA is not a full lowercase hexadecimal commit ID"
+            exit 1
+          fi
+
+          if [[ ! "$base_sha" =~ $sha_pattern ]]; then
+            echo "::error::Base object is not a full lowercase hexadecimal Git object ID"
+            exit 1
+          fi
+
+          if ! git cat-file -e "${TARGET_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::Target commit $TARGET_SHA is unavailable"
+            exit 1
+          fi
+
+          if [[ "$base_kind" == 'commit' ]] && ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+            echo "Base commit $base_sha is not present; attempting one read-only fetch"
+            if ! git fetch --no-tags --depth=1 origin "$base_sha"; then
+              echo "::warning::The targeted base fetch did not succeed"
+            fi
+          fi
+
+          if [[ "$base_kind" == 'commit' ]]; then
+            if ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+              echo "::error::Base commit $base_sha remains unavailable after the targeted fetch"
+              exit 1
+            fi
+          elif ! git cat-file -e "${base_sha}^{tree}" 2>/dev/null; then
+            echo "::error::Computed empty-tree object $base_sha is unavailable"
+            exit 1
+          fi
+
+          git diff --check "$base_sha" "$TARGET_SHA"
