@@ -24,6 +24,52 @@ def load_catalog(
     return tuple(catalog)
 
 
+FEATURE_003_RECIPE_CATALOG: tuple[Recipe, ...] = (
+    Recipe(
+        id="spinach-omelet",
+        name="Spinach Omelet",
+        required_ingredient_ids=("eggs", "spinach", "olive-oil"),
+        calories=410,
+        protein_g=28.0,
+        prep_minutes=15,
+    ),
+    Recipe(
+        id="black-bean-tacos",
+        name="Black Bean Tacos",
+        required_ingredient_ids=(
+            "black-beans",
+            "corn-tortillas",
+            "avocado",
+            "lime",
+        ),
+        calories=520,
+        protein_g=19.0,
+        prep_minutes=25,
+    ),
+    Recipe(
+        id="peanut-noodles",
+        name="Peanut Noodles",
+        required_ingredient_ids=("noodles", "peanuts", "soy-sauce"),
+        calories=560,
+        protein_g=20.0,
+        prep_minutes=20,
+    ),
+    Recipe(
+        id="lentil-soup",
+        name="Lentil Soup",
+        required_ingredient_ids=(
+            "lentils",
+            "carrots",
+            "celery",
+            "vegetable-broth",
+        ),
+        calories=360,
+        protein_g=22.0,
+        prep_minutes=45,
+    ),
+)
+
+
 INITIAL_RECIPE_CATALOG: tuple[dict[str, object], ...] = (
     {
         "id": "spinach-omelet",

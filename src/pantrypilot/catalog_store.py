@@ -1,11 +1,12 @@
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import closing
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from pantrypilot.catalog import load_catalog
+from pantrypilot.catalog_release import CatalogRelease, catalog_manifest_digest
 from pantrypilot.database import (
     CURRENT_SCHEMA_VERSION,
     DatabaseError,
@@ -163,37 +164,187 @@ def load_durable_catalog(
                     f"catalog foreign-key check failed for '{database_path}'"
                 )
 
-            records: dict[str, dict[str, object]] = {}
-            ingredients_by_recipe: dict[str, list[str]] = {}
-            for row in connection.execute(
-                "SELECT id, name, calories, protein_g, prep_minutes "
-                "FROM recipes ORDER BY id"
-            ):
-                ingredient_ids: list[str] = []
-                records[row["id"]] = {
-                    "id": row["id"],
-                    "name": row["name"],
-                    "required_ingredient_ids": ingredient_ids,
-                    "calories": row["calories"],
-                    "protein_g": row["protein_g"],
-                    "prep_minutes": row["prep_minutes"],
-                }
-                ingredients_by_recipe[row["id"]] = ingredient_ids
-
-            for row in connection.execute(
-                "SELECT recipe_id, ingredient_id "
-                "FROM recipe_ingredients ORDER BY recipe_id, position"
-            ):
-                ingredient_ids = ingredients_by_recipe.get(row["recipe_id"])
-                if ingredient_ids is None:
-                    raise CatalogStoreError(
-                        f"catalog relationship references missing recipe "
-                        f"'{row['recipe_id']}' at '{database_path}'"
-                    )
-                ingredient_ids.append(row["ingredient_id"])
-
-        return load_catalog(records.values(), ingredient_registry)
+            return _load_catalog_from_connection(
+                connection,
+                database_path,
+                ingredient_registry,
+            )
     except CatalogStoreError:
         raise
     except (sqlite3.Error, ValidationError, ValueError, TypeError) as error:
         raise CatalogStoreError(f"catalog load failed for '{database_path}'") from error
+
+
+def _load_catalog_from_connection(
+    connection: sqlite3.Connection,
+    database_path: Path,
+    ingredient_registry: IngredientRegistry,
+    *,
+    official_only: bool = False,
+) -> tuple[Recipe, ...]:
+    where_clause = " WHERE is_official = 1" if official_only else ""
+    records: dict[str, dict[str, object]] = {}
+    ingredients_by_recipe: dict[str, list[str]] = {}
+    for row in connection.execute(
+        "SELECT id, name, calories, protein_g, prep_minutes FROM recipes"
+        f"{where_clause} ORDER BY id"
+    ):
+        ingredient_ids: list[str] = []
+        records[row["id"]] = {
+            "id": row["id"],
+            "name": row["name"],
+            "required_ingredient_ids": ingredient_ids,
+            "calories": row["calories"],
+            "protein_g": row["protein_g"],
+            "prep_minutes": row["prep_minutes"],
+        }
+        ingredients_by_recipe[row["id"]] = ingredient_ids
+
+    relationship_query = (
+        "SELECT recipe_id, ingredient_id FROM recipe_ingredients "
+        "ORDER BY recipe_id, position"
+    )
+    if official_only:
+        relationship_query = (
+            "SELECT recipe_id, ingredient_id FROM recipe_ingredients "
+            "WHERE recipe_id IN (SELECT id FROM recipes WHERE is_official = 1) "
+            "ORDER BY recipe_id, position"
+        )
+    for row in connection.execute(relationship_query):
+        ingredient_ids = ingredients_by_recipe.get(row["recipe_id"])
+        if ingredient_ids is None:
+            raise ValueError(
+                f"catalog relationship references missing recipe "
+                f"'{row['recipe_id']}' at '{database_path}'"
+            )
+        ingredient_ids.append(row["ingredient_id"])
+
+    return load_catalog(records.values(), ingredient_registry)
+
+
+def reconcile_catalog(
+    connection: sqlite3.Connection,
+    database_path: Path,
+    release: CatalogRelease,
+    release_digests: Mapping[int, str],
+    legacy_recipes: Sequence[Recipe],
+    ingredient_registry: IngredientRegistry,
+) -> None:
+    transaction_started = False
+    try:
+        if (
+            release_digests.get(release.version) != release.manifest_digest
+            or catalog_manifest_digest(
+                release.recipes,
+                release.retired_recipe_ids,
+            )
+            != release.manifest_digest
+        ):
+            raise ValueError("catalog release does not match its digest ledger")
+
+        connection.execute("BEGIN IMMEDIATE")
+        transaction_started = True
+        state_rows = connection.execute(
+            "SELECT id, version, manifest_digest FROM catalog_content_state"
+        ).fetchall()
+        if len(state_rows) != 1 or state_rows[0]["id"] != 1:
+            raise ValueError("catalog content state must contain exactly one row")
+        stored_version = state_rows[0]["version"]
+        stored_digest = state_rows[0]["manifest_digest"]
+        if (
+            stored_version == release.version
+            and stored_digest == release.manifest_digest
+        ):
+            connection.commit()
+            return
+        if stored_version != 0 or stored_digest != "unmanaged":
+            raise ValueError("unsupported catalog content state")
+
+        durable_recipes = _load_catalog_from_connection(
+            connection,
+            database_path,
+            ingredient_registry,
+        )
+        legacy_by_id = {recipe.id: recipe for recipe in legacy_recipes}
+        current_ids = {recipe.id for recipe in release.recipes}
+        retired_ids = set(release.retired_recipe_ids)
+        reserved_ids = current_ids | retired_ids
+        legacy_adoptable_ids: set[str] = set()
+        for durable_recipe in durable_recipes:
+            if durable_recipe.id not in reserved_ids:
+                continue
+            legacy_recipe = legacy_by_id.get(durable_recipe.id)
+            if legacy_recipe is None or durable_recipe != legacy_recipe:
+                raise ValueError(f"reserved recipe id collision: '{durable_recipe.id}'")
+            legacy_adoptable_ids.add(durable_recipe.id)
+
+        for recipe_id in legacy_adoptable_ids:
+            connection.execute(
+                "UPDATE recipes SET is_official = 1 WHERE id = ?",
+                (recipe_id,),
+            )
+        for recipe_id in retired_ids:
+            if recipe_id in legacy_adoptable_ids:
+                connection.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+        for recipe in release.recipes:
+            if recipe.id in legacy_adoptable_ids:
+                connection.execute(
+                    "UPDATE recipes SET name = ?, calories = ?, protein_g = ?, "
+                    "prep_minutes = ?, is_official = 1 WHERE id = ?",
+                    (
+                        recipe.name,
+                        recipe.calories,
+                        recipe.protein_g,
+                        recipe.prep_minutes,
+                        recipe.id,
+                    ),
+                )
+                connection.execute(
+                    "DELETE FROM recipe_ingredients WHERE recipe_id = ?",
+                    (recipe.id,),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO recipes "
+                    "(id, name, calories, protein_g, prep_minutes, is_official) "
+                    "VALUES (?, ?, ?, ?, ?, 1)",
+                    (
+                        recipe.id,
+                        recipe.name,
+                        recipe.calories,
+                        recipe.protein_g,
+                        recipe.prep_minutes,
+                    ),
+                )
+            for position, ingredient_id in enumerate(recipe.required_ingredient_ids):
+                connection.execute(
+                    "INSERT INTO recipe_ingredients "
+                    "(recipe_id, position, ingredient_id) VALUES (?, ?, ?)",
+                    (recipe.id, position, ingredient_id),
+                )
+
+        official_recipes = _load_catalog_from_connection(
+            connection,
+            database_path,
+            ingredient_registry,
+            official_only=True,
+        )
+        if (
+            catalog_manifest_digest(official_recipes, release.retired_recipe_ids)
+            != release.manifest_digest
+        ):
+            raise ValueError(
+                "reconciled official catalog digest does not match release"
+            )
+        connection.execute(
+            "UPDATE catalog_content_state SET version = ?, manifest_digest = ? "
+            "WHERE id = 1",
+            (release.version, release.manifest_digest),
+        )
+        connection.commit()
+    except (sqlite3.Error, ValidationError, ValueError, TypeError) as error:
+        if transaction_started:
+            connection.rollback()
+        raise CatalogStoreError(
+            f"catalog reconciliation failed for '{database_path}': {error}"
+        ) from error
