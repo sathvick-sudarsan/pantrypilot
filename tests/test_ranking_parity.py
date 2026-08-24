@@ -28,7 +28,9 @@ def reordered_durable_catalog(database_path: Path) -> tuple[Recipe, ...]:
         connection.execute("DELETE FROM recipe_ingredients")
         connection.execute("DELETE FROM recipes")
         connection.executemany(
-            "INSERT INTO recipes VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO recipes "
+            "(id, name, calories, protein_g, prep_minutes) "
+            "VALUES (?, ?, ?, ?, ?)",
             recipes,
         )
         connection.executemany(

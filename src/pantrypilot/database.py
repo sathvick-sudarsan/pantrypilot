@@ -51,10 +51,33 @@ CREATE TABLE saved_pantry_items (
 )
 """
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 SCHEMA_MIGRATIONS = (
     (1, (CREATE_RECIPES, CREATE_RECIPE_INGREDIENTS)),
     (2, (CREATE_SAVED_PANTRY, CREATE_SAVED_PANTRY_ITEMS)),
+    (
+        3,
+        (
+            "ALTER TABLE recipes ADD COLUMN is_official INTEGER NOT NULL DEFAULT 0 "
+            "CHECK (typeof(is_official) = 'integer' AND is_official IN (0, 1))",
+            """
+            CREATE TABLE catalog_content_state (
+                id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+                version INTEGER NOT NULL
+                    CHECK (typeof(version) = 'integer' AND version >= 0),
+                manifest_digest TEXT NOT NULL CHECK (
+                    typeof(manifest_digest) = 'text' AND (
+                        (version = 0 AND manifest_digest = 'unmanaged') OR
+                        (version > 0 AND length(manifest_digest) = 64
+                            AND manifest_digest NOT GLOB '*[^0123456789abcdef]*')
+                    )
+                )
+            )
+            """,
+            "INSERT INTO catalog_content_state (id, version, manifest_digest) "
+            "VALUES (1, 0, 'unmanaged')",
+        ),
+    ),
 )
 
 

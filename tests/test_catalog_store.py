@@ -29,7 +29,9 @@ def insert_recipe(
     ingredients: tuple[tuple[int, str], ...] = ((0, "eggs"),),
 ) -> None:
     connection.execute(
-        "INSERT INTO recipes VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO recipes "
+        "(id, name, calories, protein_g, prep_minutes) "
+        "VALUES (?, ?, ?, ?, ?)",
         (recipe_id, name, calories, protein_g, prep_minutes),
     )
     for position, ingredient_id in ingredients:
@@ -56,7 +58,7 @@ def test_initialize_catalog_seeds_approved_recipes_and_survives_reopen(
         key=lambda recipe: recipe.id,
     )
     with sqlite3.connect(database_path) as reopened:
-        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 3
         assert {
             row[0]
             for row in reopened.execute(
@@ -67,6 +69,7 @@ def test_initialize_catalog_seeds_approved_recipes_and_survives_reopen(
             "recipe_ingredients",
             "saved_pantry",
             "saved_pantry_items",
+            "catalog_content_state",
         }
         assert reopened.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 4
         assert reopened.execute("SELECT COUNT(*) FROM recipe_ingredients").fetchone()[
@@ -292,7 +295,7 @@ def test_one_invalid_recipe_fails_catalog_instead_of_skipping_it(
 def test_current_version_with_missing_schema_fails_load(tmp_path: Path) -> None:
     database_path = tmp_path / "catalog.sqlite3"
     with sqlite3.connect(database_path) as connection:
-        connection.execute("PRAGMA user_version = 2")
+        connection.execute("PRAGMA user_version = 3")
 
     with pytest.raises(CatalogStoreError, match="catalog load failed"):
         load_durable_catalog(database_path, INGREDIENT_REGISTRY)
@@ -314,7 +317,7 @@ def test_foreign_key_violation_fails_before_hydration(tmp_path: Path) -> None:
         load_durable_catalog(database_path, INGREDIENT_REGISTRY)
 
 
-@pytest.mark.parametrize("version", [0, 1, 3])
+@pytest.mark.parametrize("version", [0, 1, 2])
 def test_wrong_schema_version_fails_load(tmp_path: Path, version: int) -> None:
     database_path = tmp_path / "catalog.sqlite3"
     with sqlite3.connect(database_path) as connection:
@@ -379,7 +382,9 @@ def test_recipe_relationship_keys_and_checks_reject_duplicates(
     with closing(connect_catalog(database_path)) as connection:
         migrate_catalog(connection, database_path)
         connection.execute(
-            "INSERT INTO recipes VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO recipes "
+            "(id, name, calories, protein_g, prep_minutes) "
+            "VALUES (?, ?, ?, ?, ?)",
             ("recipe-a", "Recipe A", 100, 10.0, 10),
         )
         connection.execute(
@@ -389,7 +394,9 @@ def test_recipe_relationship_keys_and_checks_reject_duplicates(
 
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
-                "INSERT INTO recipes VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO recipes "
+                "(id, name, calories, protein_g, prep_minutes) "
+                "VALUES (?, ?, ?, ?, ?)",
                 ("recipe-a", "Duplicate", 200, 20.0, 20),
             )
         with pytest.raises(sqlite3.IntegrityError):
@@ -423,7 +430,9 @@ def test_recipe_text_checks_reject_blank_values(
         migrate_catalog(connection, database_path)
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
-                "INSERT INTO recipes VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO recipes "
+                "(id, name, calories, protein_g, prep_minutes) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (recipe_id, name, 100, 10.0, 10),
             )
 
@@ -434,7 +443,9 @@ def test_recipe_id_not_null_constraint_rejects_null(tmp_path: Path) -> None:
         migrate_catalog(connection, database_path)
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
-                "INSERT INTO recipes VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO recipes "
+                "(id, name, calories, protein_g, prep_minutes) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (None, "Recipe A", 100, 10.0, 10),
             )
 
@@ -452,7 +463,9 @@ def test_relationship_checks_reject_invalid_position_and_blank_ingredient(
     with closing(connect_catalog(database_path)) as connection:
         migrate_catalog(connection, database_path)
         connection.execute(
-            "INSERT INTO recipes VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO recipes "
+            "(id, name, calories, protein_g, prep_minutes) "
+            "VALUES (?, ?, ?, ?, ?)",
             ("recipe-a", "Recipe A", 100, 10.0, 10),
         )
         with pytest.raises(sqlite3.IntegrityError):
