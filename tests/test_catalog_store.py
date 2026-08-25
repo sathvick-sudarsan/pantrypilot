@@ -123,6 +123,25 @@ def saved_pantry_rows(
     )
 
 
+def database_rows(
+    connection: sqlite3.Connection,
+) -> tuple[list[tuple[object, ...]], ...]:
+    recipes, relationships = catalog_rows(connection)
+    pantry, pantry_items = saved_pantry_rows(connection)
+    return (
+        recipes,
+        relationships,
+        [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT id, version, manifest_digest FROM catalog_content_state"
+            )
+        ],
+        pantry,
+        pantry_items,
+    )
+
+
 def release_for(
     recipes: tuple[Recipe, ...],
     retired_recipe_ids: tuple[str, ...] = (),
@@ -150,6 +169,98 @@ def synthetic_recipe(recipe_id: str) -> Recipe:
         protein_g=21.0,
         prep_minutes=18,
     )
+
+
+MANAGED_RELEASE_ONE_RECIPES = (
+    Recipe(
+        id="managed-one",
+        name="Managed One",
+        required_ingredient_ids=("eggs", "spinach"),
+        calories=320,
+        protein_g=21.0,
+        prep_minutes=18,
+    ),
+    Recipe(
+        id="managed-retired",
+        name="Managed Retired",
+        required_ingredient_ids=("black-beans", "lime"),
+        calories=400,
+        protein_g=18.0,
+        prep_minutes=25,
+    ),
+)
+MANAGED_RELEASE_TWO_RECIPES = (
+    Recipe(
+        id="managed-one",
+        name="Managed One Revised",
+        required_ingredient_ids=("spinach", "eggs", "olive-oil"),
+        calories=340,
+        protein_g=22.0,
+        prep_minutes=20,
+    ),
+    Recipe(
+        id="managed-two",
+        name="Managed Two",
+        required_ingredient_ids=("lentils", "carrots"),
+        calories=360,
+        protein_g=24.0,
+        prep_minutes=30,
+    ),
+)
+MANAGED_RELEASE_DIGESTS = {
+    1: "fa7fd9817e98b4b45f20ebbab71b4091d5830c47671d9bc6a793734e90c3994e",
+    2: "2f801c1e4ebf885bed03ba6a0f7c0cc76e9d9d33c0352bf8924a679523cc758c",
+}
+
+
+def managed_releases() -> tuple[CatalogRelease, CatalogRelease]:
+    return (
+        build_catalog_release(
+            MANAGED_RELEASE_ONE_RECIPES,
+            (),
+            INGREDIENT_REGISTRY,
+            1,
+            {1: MANAGED_RELEASE_DIGESTS[1]},
+        ),
+        build_catalog_release(
+            MANAGED_RELEASE_TWO_RECIPES,
+            ("managed-retired",),
+            INGREDIENT_REGISTRY,
+            2,
+            MANAGED_RELEASE_DIGESTS,
+        ),
+    )
+
+
+def install_managed_release_one(
+    connection: sqlite3.Connection,
+    database_path: Path,
+) -> None:
+    release_one, _ = managed_releases()
+    migrate_catalog(connection, database_path)
+    connection.execute("INSERT INTO saved_pantry VALUES (1)")
+    connection.executemany(
+        "INSERT INTO saved_pantry_items VALUES (?, ?)",
+        [(1, "eggs"), (1, "spinach")],
+    )
+    reconcile_catalog(
+        connection,
+        database_path,
+        release_one,
+        {1: MANAGED_RELEASE_DIGESTS[1]},
+        FEATURE_003_RECIPE_CATALOG,
+        INGREDIENT_REGISTRY,
+    )
+
+
+class CommitFailingConnection(sqlite3.Connection):
+    fail_next_commit = False
+
+    def commit(self) -> None:
+        if self.fail_next_commit:
+            self.fail_next_commit = False
+            raise sqlite3.OperationalError("synthetic commit failure")
+        super().commit()
 
 
 def schema_two_fixture(
@@ -886,6 +997,354 @@ def test_reconcile_catalog_successful_rerun_is_idempotent(tmp_path: Path) -> Non
                 )
             ],
         ) == before
+
+
+@pytest.mark.parametrize(
+    ("stored_version", "stored_digest", "ledger", "message"),
+    [
+        (0, "not-unmanaged", MANAGED_RELEASE_DIGESTS, "version 0 must be unmanaged"),
+        (
+            1,
+            MANAGED_RELEASE_DIGESTS[1],
+            {2: MANAGED_RELEASE_DIGESTS[2]},
+            "unknown catalog content version",
+        ),
+        (1, "malformed", MANAGED_RELEASE_DIGESTS, "release digest ledger"),
+        (
+            1,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            MANAGED_RELEASE_DIGESTS,
+            "release digest ledger",
+        ),
+        (
+            3,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            MANAGED_RELEASE_DIGESTS,
+            "newer than application",
+        ),
+    ],
+    ids=(
+        "version-zero-nonsentinel",
+        "unknown-historical-version",
+        "malformed-digest",
+        "historical-digest-mismatch",
+        "database-version-newer-than-application",
+    ),
+)
+def test_reconcile_catalog_rejects_invalid_managed_state_before_recipe_writes(
+    tmp_path: Path,
+    stored_version: int,
+    stored_digest: str,
+    ledger: dict[int, str],
+    message: str,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    _, release_two = managed_releases()
+    with closing(connect_catalog(database_path)) as connection:
+        install_managed_release_one(connection, database_path)
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(
+            "UPDATE catalog_content_state SET version = ?, manifest_digest = ?",
+            (stored_version, stored_digest),
+        )
+        connection.execute("PRAGMA ignore_check_constraints = OFF")
+        before = database_rows(connection)
+
+        with pytest.raises(CatalogStoreError, match=message):
+            reconcile_catalog(
+                connection,
+                database_path,
+                release_two,
+                ledger,
+                FEATURE_003_RECIPE_CATALOG,
+                INGREDIENT_REGISTRY,
+            )
+
+        assert database_rows(connection) == before
+
+
+def test_reconcile_catalog_advances_managed_release_atomically(tmp_path: Path) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    _, release_two = managed_releases()
+    out_of_band = synthetic_recipe("durable-only")
+    with closing(connect_catalog(database_path)) as connection:
+        install_managed_release_one(connection, database_path)
+        insert_recipe_model(connection, out_of_band)
+        pantry_before = saved_pantry_rows(connection)
+
+        reconcile_catalog(
+            connection,
+            database_path,
+            release_two,
+            MANAGED_RELEASE_DIGESTS,
+            FEATURE_003_RECIPE_CATALOG,
+            INGREDIENT_REGISTRY,
+        )
+
+        assert load_durable_catalog(database_path, INGREDIENT_REGISTRY) == (
+            out_of_band,
+            *release_two.recipes,
+        )
+        assert (
+            connection.execute(
+                "SELECT id FROM recipes WHERE id = 'managed-retired'"
+            ).fetchall()
+            == []
+        )
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT id, version, manifest_digest FROM catalog_content_state"
+            )
+        ] == [(1, 2, MANAGED_RELEASE_DIGESTS[2])]
+        assert saved_pantry_rows(connection) == pantry_before
+
+
+def test_reconcile_catalog_current_rerun_restores_complete_official_rows(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    _, release_two = managed_releases()
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        connection.execute("INSERT INTO saved_pantry VALUES (1)")
+        connection.execute("INSERT INTO saved_pantry_items VALUES (1, 'eggs')")
+        reconcile_catalog(
+            connection,
+            database_path,
+            release_two,
+            MANAGED_RELEASE_DIGESTS,
+            FEATURE_003_RECIPE_CATALOG,
+            INGREDIENT_REGISTRY,
+        )
+        expected = database_rows(connection)
+        connection.execute(
+            "UPDATE recipes SET name = 'Edited', calories = 1, protein_g = ?, "
+            "prep_minutes = 1 WHERE id = 'managed-one'",
+            (float("inf"),),
+        )
+        connection.execute(
+            "DELETE FROM recipe_ingredients WHERE recipe_id = 'managed-one'"
+        )
+        connection.execute("DELETE FROM recipes WHERE id = 'managed-two'")
+
+        reconcile_catalog(
+            connection,
+            database_path,
+            release_two,
+            MANAGED_RELEASE_DIGESTS,
+            FEATURE_003_RECIPE_CATALOG,
+            INGREDIENT_REGISTRY,
+        )
+
+        assert database_rows(connection) == expected
+
+
+@pytest.mark.parametrize("is_official", [0, 1], ids=("out-of-band", "official"))
+def test_reconcile_catalog_current_rerun_rejects_every_retired_id(
+    tmp_path: Path,
+    is_official: int,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    release_one, release_two = managed_releases()
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        reconcile_catalog(
+            connection,
+            database_path,
+            release_two,
+            MANAGED_RELEASE_DIGESTS,
+            FEATURE_003_RECIPE_CATALOG,
+            INGREDIENT_REGISTRY,
+        )
+        insert_recipe_model(
+            connection,
+            release_one.recipes[1],
+            is_official=is_official,
+        )
+        before = database_rows(connection)
+
+        with pytest.raises(CatalogStoreError, match="reserved recipe id collision"):
+            reconcile_catalog(
+                connection,
+                database_path,
+                release_two,
+                MANAGED_RELEASE_DIGESTS,
+                FEATURE_003_RECIPE_CATALOG,
+                INGREDIENT_REGISTRY,
+            )
+
+        assert database_rows(connection) == before
+
+
+@pytest.mark.parametrize(
+    "collision_kind", ["current", "retired"], ids=("current-id", "retired-id")
+)
+def test_reconcile_catalog_managed_collision_scan_precedes_every_recipe_write(
+    tmp_path: Path,
+    collision_kind: str,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    _, release_two = managed_releases()
+    with closing(connect_catalog(database_path)) as connection:
+        install_managed_release_one(connection, database_path)
+        connection.execute(
+            "UPDATE recipes SET name = 'Needs Correction' WHERE id = 'managed-one'"
+        )
+        connection.execute(
+            "DELETE FROM recipe_ingredients WHERE recipe_id = 'managed-one'"
+        )
+        connection.executemany(
+            "INSERT INTO recipe_ingredients VALUES (?, ?, ?)",
+            [("managed-one", 0, "eggs"), ("managed-one", 1, "spinach")],
+        )
+        if collision_kind == "current":
+            insert_recipe_model(connection, release_two.recipes[1])
+        else:
+            connection.execute(
+                "UPDATE recipes SET is_official = 0 WHERE id = 'managed-retired'"
+            )
+        connection.executescript(
+            """
+            CREATE TRIGGER reject_recipe_update BEFORE UPDATE ON recipes
+            BEGIN SELECT RAISE(FAIL, 'write before collision'); END;
+            CREATE TRIGGER reject_recipe_insert BEFORE INSERT ON recipes
+            BEGIN SELECT RAISE(FAIL, 'write before collision'); END;
+            CREATE TRIGGER reject_recipe_delete BEFORE DELETE ON recipes
+            BEGIN SELECT RAISE(FAIL, 'write before collision'); END;
+            CREATE TRIGGER reject_relationship_delete
+            BEFORE DELETE ON recipe_ingredients
+            BEGIN SELECT RAISE(FAIL, 'write before collision'); END;
+            """
+        )
+        before = database_rows(connection)
+
+        with pytest.raises(CatalogStoreError, match="reserved recipe id collision"):
+            reconcile_catalog(
+                connection,
+                database_path,
+                release_two,
+                MANAGED_RELEASE_DIGESTS,
+                FEATURE_003_RECIPE_CATALOG,
+                INGREDIENT_REGISTRY,
+            )
+
+        assert database_rows(connection) == before
+
+
+def test_reconcile_catalog_rejects_unretired_orphan_official_before_writes(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    _, release_two = managed_releases()
+    with closing(connect_catalog(database_path)) as connection:
+        install_managed_release_one(connection, database_path)
+        insert_recipe_model(
+            connection,
+            synthetic_recipe("orphan-official"),
+            is_official=1,
+        )
+        before = database_rows(connection)
+
+        with pytest.raises(CatalogStoreError, match="not current or retired"):
+            reconcile_catalog(
+                connection,
+                database_path,
+                release_two,
+                MANAGED_RELEASE_DIGESTS,
+                FEATURE_003_RECIPE_CATALOG,
+                INGREDIENT_REGISTRY,
+            )
+
+        assert database_rows(connection) == before
+
+
+def test_reconcile_catalog_resulting_digest_mismatch_rolls_back_every_table(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    _, release_two = managed_releases()
+    with closing(connect_catalog(database_path)) as connection:
+        install_managed_release_one(connection, database_path)
+        connection.execute(
+            "CREATE TRIGGER corrupt_resulting_official_catalog "
+            "AFTER INSERT ON recipe_ingredients "
+            "WHEN NEW.recipe_id = 'managed-two' AND NEW.position = 1 "
+            "BEGIN UPDATE recipes SET calories = calories + 1 "
+            "WHERE id = 'managed-one'; END"
+        )
+        before = database_rows(connection)
+
+        with pytest.raises(CatalogStoreError, match="digest does not match release"):
+            reconcile_catalog(
+                connection,
+                database_path,
+                release_two,
+                MANAGED_RELEASE_DIGESTS,
+                FEATURE_003_RECIPE_CATALOG,
+                INGREDIENT_REGISTRY,
+            )
+
+        assert database_rows(connection) == before
+
+
+def test_reconcile_catalog_state_update_failure_rolls_back_every_table(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    _, release_two = managed_releases()
+    with closing(connect_catalog(database_path)) as connection:
+        install_managed_release_one(connection, database_path)
+        connection.execute(
+            "CREATE TRIGGER reject_catalog_pair_update "
+            "BEFORE UPDATE ON catalog_content_state "
+            "BEGIN SELECT RAISE(FAIL, 'synthetic pair update failure'); END"
+        )
+        before = database_rows(connection)
+
+        with pytest.raises(CatalogStoreError, match="synthetic pair update failure"):
+            reconcile_catalog(
+                connection,
+                database_path,
+                release_two,
+                MANAGED_RELEASE_DIGESTS,
+                FEATURE_003_RECIPE_CATALOG,
+                INGREDIENT_REGISTRY,
+            )
+
+        assert database_rows(connection) == before
+
+
+def test_reconcile_catalog_commit_failure_preserves_old_complete_release(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    _, release_two = managed_releases()
+    connection = sqlite3.connect(
+        database_path,
+        isolation_level=None,
+        factory=CommitFailingConnection,
+    )
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        install_managed_release_one(connection, database_path)
+        before = database_rows(connection)
+        connection.fail_next_commit = True
+
+        with pytest.raises(CatalogStoreError, match="synthetic commit failure"):
+            reconcile_catalog(
+                connection,
+                database_path,
+                release_two,
+                MANAGED_RELEASE_DIGESTS,
+                FEATURE_003_RECIPE_CATALOG,
+                INGREDIENT_REGISTRY,
+            )
+
+        assert database_rows(connection) == before
+    finally:
+        connection.close()
 
 
 def test_load_durable_catalog_hydrates_frozen_recipes_in_position_order(

@@ -251,43 +251,69 @@ def reconcile_catalog(
             raise ValueError("catalog content state must contain exactly one row")
         stored_version = state_rows[0]["version"]
         stored_digest = state_rows[0]["manifest_digest"]
-        if (
-            stored_version == release.version
-            and stored_digest == release.manifest_digest
-        ):
-            connection.commit()
-            return
-        if stored_version != 0 or stored_digest != "unmanaged":
-            raise ValueError("unsupported catalog content state")
+        if stored_version > release.version:
+            raise ValueError(
+                f"catalog content version {stored_version} is newer than "
+                f"application version {release.version}"
+            )
+        if stored_version == 0:
+            if stored_digest != "unmanaged":
+                raise ValueError("catalog content version 0 must be unmanaged")
+        else:
+            historical_digest = release_digests.get(stored_version)
+            if historical_digest is None:
+                raise ValueError(f"unknown catalog content version: {stored_version}")
+            if stored_digest != historical_digest:
+                raise ValueError(
+                    "stored catalog content digest does not match release digest ledger"
+                )
 
-        durable_recipes = _load_catalog_from_connection(
-            connection,
-            database_path,
-            ingredient_registry,
-        )
-        legacy_by_id = {recipe.id: recipe for recipe in legacy_recipes}
+        official_markers = {
+            row["id"]: row["is_official"]
+            for row in connection.execute("SELECT id, is_official FROM recipes")
+        }
         current_ids = {recipe.id for recipe in release.recipes}
         retired_ids = set(release.retired_recipe_ids)
         reserved_ids = current_ids | retired_ids
-        legacy_adoptable_ids: set[str] = set()
-        for durable_recipe in durable_recipes:
-            if durable_recipe.id not in reserved_ids:
-                continue
-            legacy_recipe = legacy_by_id.get(durable_recipe.id)
-            if legacy_recipe is None or durable_recipe != legacy_recipe:
-                raise ValueError(f"reserved recipe id collision: '{durable_recipe.id}'")
-            legacy_adoptable_ids.add(durable_recipe.id)
-
-        for recipe_id in legacy_adoptable_ids:
-            connection.execute(
-                "UPDATE recipes SET is_official = 1 WHERE id = ?",
-                (recipe_id,),
+        deletion_eligible_ids: set[str] = set()
+        if stored_version == 0:
+            durable_recipes = _load_catalog_from_connection(
+                connection,
+                database_path,
+                ingredient_registry,
             )
-        for recipe_id in retired_ids:
-            if recipe_id in legacy_adoptable_ids:
-                connection.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+            legacy_by_id = {recipe.id: recipe for recipe in legacy_recipes}
+            for durable_recipe in durable_recipes:
+                if durable_recipe.id not in reserved_ids:
+                    continue
+                legacy_recipe = legacy_by_id.get(durable_recipe.id)
+                if legacy_recipe is None or durable_recipe != legacy_recipe:
+                    raise ValueError(
+                        f"reserved recipe id collision: '{durable_recipe.id}'"
+                    )
+                if durable_recipe.id in retired_ids:
+                    deletion_eligible_ids.add(durable_recipe.id)
+        else:
+            for recipe_id in reserved_ids:
+                marker = official_markers.get(recipe_id)
+                if marker == 0 or (
+                    recipe_id in retired_ids
+                    and marker is not None
+                    and stored_version == release.version
+                ):
+                    raise ValueError(f"reserved recipe id collision: '{recipe_id}'")
+                if recipe_id in retired_ids and marker == 1:
+                    deletion_eligible_ids.add(recipe_id)
+
+        for recipe_id, marker in official_markers.items():
+            if marker == 1 and recipe_id not in current_ids:
+                if recipe_id not in deletion_eligible_ids:
+                    raise ValueError(
+                        f"official recipe id is not current or retired: '{recipe_id}'"
+                    )
+
         for recipe in release.recipes:
-            if recipe.id in legacy_adoptable_ids:
+            if recipe.id in official_markers:
                 connection.execute(
                     "UPDATE recipes SET name = ?, calories = ?, protein_g = ?, "
                     "prep_minutes = ?, is_official = 1 WHERE id = ?",
@@ -322,6 +348,8 @@ def reconcile_catalog(
                     "(recipe_id, position, ingredient_id) VALUES (?, ?, ?)",
                     (recipe.id, position, ingredient_id),
                 )
+        for recipe_id in deletion_eligible_ids:
+            connection.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
 
         official_recipes = _load_catalog_from_connection(
             connection,
