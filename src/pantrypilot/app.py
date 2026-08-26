@@ -9,7 +9,6 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from pantrypilot.catalog import INITIAL_RECIPE_CATALOG
 from pantrypilot.catalog_store import initialize_catalog, load_durable_catalog
 from pantrypilot.ingredients import INGREDIENT_REGISTRY, resolve_ingredients
 from pantrypilot.models import (
@@ -48,7 +47,6 @@ def create_app(database_path: Path) -> FastAPI:
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         initialize_catalog(
             database_path,
-            INITIAL_RECIPE_CATALOG,
             INGREDIENT_REGISTRY,
         )
         application.state.recipe_catalog = load_durable_catalog(

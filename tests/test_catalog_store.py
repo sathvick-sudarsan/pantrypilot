@@ -5,15 +5,19 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import pantrypilot.catalog_release as catalog_release_module
+import pantrypilot.catalog_store as catalog_store_module
 from pantrypilot.catalog import (
     FEATURE_003_RECIPE_CATALOG,
     INITIAL_RECIPE_CATALOG,
-    load_catalog,
+    OFFICIAL_RECIPE_CATALOG,
 )
 from pantrypilot.catalog_release import (
+    CATALOG_RELEASE_DIGESTS,
     CatalogRelease,
     build_catalog_release,
     catalog_manifest_digest,
+    current_catalog_release,
 )
 from pantrypilot.catalog_store import (
     CatalogStoreError,
@@ -302,22 +306,16 @@ def schema_two_fixture(
     connection.commit()
 
 
-def test_initialize_catalog_seeds_approved_recipes_and_survives_reopen(
+def test_initialize_catalog_reconciles_released_recipes_and_survives_reopen(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "catalog.sqlite3"
+    release = current_catalog_release(INGREDIENT_REGISTRY)
 
-    initialize_catalog(
-        database_path,
-        INITIAL_RECIPE_CATALOG,
-        INGREDIENT_REGISTRY,
-    )
+    initialize_catalog(database_path, INGREDIENT_REGISTRY)
     recipes = load_durable_catalog(database_path, INGREDIENT_REGISTRY)
 
-    assert sorted(recipes, key=lambda recipe: recipe.id) == sorted(
-        load_catalog(INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY),
-        key=lambda recipe: recipe.id,
-    )
+    assert recipes == release.recipes
     with sqlite3.connect(database_path) as reopened:
         assert reopened.execute("PRAGMA user_version").fetchone()[0] == 3
         assert {
@@ -332,27 +330,85 @@ def test_initialize_catalog_seeds_approved_recipes_and_survives_reopen(
             "saved_pantry_items",
             "catalog_content_state",
         }
-        assert reopened.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 4
+        assert reopened.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 24
+        assert (
+            reopened.execute(
+                "SELECT COUNT(*) FROM recipes WHERE is_official = 1"
+            ).fetchone()[0]
+            == 24
+        )
         assert reopened.execute("SELECT COUNT(*) FROM recipe_ingredients").fetchone()[
             0
-        ] == sum(
-            len(record["required_ingredient_ids"]) for record in INITIAL_RECIPE_CATALOG
+        ] == sum(len(recipe.required_ingredient_ids) for recipe in release.recipes)
+        assert reopened.execute(
+            "SELECT version, manifest_digest FROM catalog_content_state WHERE id = 1"
+        ).fetchone() == (
+            1,
+            "f811853765a0732ae34521e47c2f7e3c691f5cb00bfec4e138f9ce08a01c9f2c",
         )
 
 
-def test_invalid_seed_is_validated_before_any_insert(tmp_path: Path) -> None:
-    database_path = tmp_path / "catalog.sqlite3"
-    invalid_seed = ({**INITIAL_RECIPE_CATALOG[0], "id": ""},)
+@pytest.mark.parametrize(
+    ("recipes", "retired_recipe_ids"),
+    [
+        (
+            lambda: (
+                OFFICIAL_RECIPE_CATALOG[0].model_copy(
+                    update={"name": "Changed Recipe"}
+                ),
+                *OFFICIAL_RECIPE_CATALOG[1:],
+            ),
+            (),
+        ),
+        (
+            lambda: (
+                OFFICIAL_RECIPE_CATALOG[0].model_copy(
+                    update={
+                        "required_ingredient_ids": tuple(
+                            reversed(OFFICIAL_RECIPE_CATALOG[0].required_ingredient_ids)
+                        )
+                    }
+                ),
+                *OFFICIAL_RECIPE_CATALOG[1:],
+            ),
+            (),
+        ),
+        (
+            lambda: (*OFFICIAL_RECIPE_CATALOG, synthetic_recipe("added-recipe")),
+            (),
+        ),
+        (lambda: OFFICIAL_RECIPE_CATALOG[:-1], ()),
+        (lambda: OFFICIAL_RECIPE_CATALOG, ("retired-recipe",)),
+    ],
+    ids=("owned-scalar", "ingredient-order", "addition", "removal", "retired-set"),
+)
+def test_initialize_catalog_rejects_release_drift_before_database_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recipes,
+    retired_recipe_ids: tuple[str, ...],
+) -> None:
+    database_path = tmp_path / "must-not-exist.sqlite3"
+    connected = False
 
-    with pytest.raises(CatalogStoreError, match="seed validation failed"):
-        initialize_catalog(database_path, invalid_seed, INGREDIENT_REGISTRY)
+    def fail_if_connected(_database_path: Path) -> sqlite3.Connection:
+        nonlocal connected
+        connected = True
+        raise AssertionError("release drift reached database access")
 
-    with sqlite3.connect(database_path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 0
-        assert (
-            connection.execute("SELECT COUNT(*) FROM recipe_ingredients").fetchone()[0]
-            == 0
-        )
+    monkeypatch.setattr(catalog_release_module, "OFFICIAL_RECIPE_CATALOG", recipes())
+    monkeypatch.setattr(
+        catalog_release_module,
+        "RETIRED_OFFICIAL_RECIPE_IDS",
+        retired_recipe_ids,
+    )
+    monkeypatch.setattr(catalog_store_module, "connect_catalog", fail_if_connected)
+
+    with pytest.raises(CatalogStoreError, match="release validation failed"):
+        initialize_catalog(database_path, INGREDIENT_REGISTRY)
+
+    assert not connected
+    assert not database_path.exists()
 
 
 def test_seed_failure_rolls_back_every_recipe_and_relationship(tmp_path: Path) -> None:
@@ -391,8 +447,8 @@ def test_recipe_rows_without_any_relationship_rows_fail_initialization(
         insert_recipe(connection, ingredients=())
         connection.commit()
 
-    with pytest.raises(CatalogStoreError, match="partially initialized"):
-        initialize_catalog(database_path, INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
+    with pytest.raises(CatalogStoreError, match="catalog reconciliation failed"):
+        initialize_catalog(database_path, INGREDIENT_REGISTRY)
 
 
 def test_one_zero_relationship_recipe_fails_non_empty_initialization(
@@ -405,8 +461,99 @@ def test_one_zero_relationship_recipe_fails_non_empty_initialization(
         insert_recipe(connection, recipe_id="incomplete", ingredients=())
         connection.commit()
 
-    with pytest.raises(CatalogStoreError, match="partially initialized"):
-        initialize_catalog(database_path, INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
+    with pytest.raises(CatalogStoreError, match="catalog reconciliation failed"):
+        initialize_catalog(database_path, INGREDIENT_REGISTRY)
+
+
+def test_initialize_catalog_restores_official_edits_and_missing_rows(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    release = current_catalog_release(INGREDIENT_REGISTRY)
+    initialize_catalog(database_path, INGREDIENT_REGISTRY)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            "UPDATE recipes SET name = 'Edited', calories = 1 "
+            "WHERE id = 'spinach-omelet'"
+        )
+        connection.execute("DELETE FROM recipes WHERE id = 'black-bean-tacos'")
+
+    initialize_catalog(database_path, INGREDIENT_REGISTRY)
+
+    assert load_durable_catalog(database_path, INGREDIENT_REGISTRY) == release.recipes
+
+
+def test_initialize_catalog_preserves_out_of_band_recipe_and_saved_pantry(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    out_of_band = synthetic_recipe("durable-only")
+    initialize_catalog(database_path, INGREDIENT_REGISTRY)
+    with sqlite3.connect(database_path) as connection:
+        insert_recipe_model(connection, out_of_band)
+        connection.execute("INSERT INTO saved_pantry VALUES (1)")
+        connection.executemany(
+            "INSERT INTO saved_pantry_items VALUES (?, ?)",
+            [(1, "eggs"), (1, "spinach")],
+        )
+
+    initialize_catalog(database_path, INGREDIENT_REGISTRY)
+
+    assert out_of_band in load_durable_catalog(database_path, INGREDIENT_REGISTRY)
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT is_official FROM recipes WHERE id = 'durable-only'"
+        ).fetchone() == (0,)
+        assert saved_pantry_rows(connection) == (
+            [(1,)],
+            [(1, "eggs"), (1, "spinach")],
+        )
+
+
+@pytest.mark.parametrize("collision_kind", ["current", "retired"])
+def test_initialize_catalog_rejects_reserved_out_of_band_collision_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    collision_kind: str,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    released = current_catalog_release(INGREDIENT_REGISTRY)
+    if collision_kind == "current":
+        release = released
+        collision = released.recipes[0].model_copy(update={"name": "Out of Band"})
+        ledger = dict(CATALOG_RELEASE_DIGESTS)
+    else:
+        collision = synthetic_recipe("retired-recipe")
+        digest = catalog_manifest_digest(released.recipes, (collision.id,))
+        release = build_catalog_release(
+            released.recipes,
+            (collision.id,),
+            INGREDIENT_REGISTRY,
+            1,
+            {1: digest},
+        )
+        ledger = {1: digest}
+
+    monkeypatch.setattr(
+        catalog_store_module,
+        "current_catalog_release",
+        lambda _ingredient_registry: release,
+    )
+    monkeypatch.setattr(catalog_store_module, "CATALOG_RELEASE_DIGESTS", ledger)
+    with closing(connect_catalog(database_path)) as connection:
+        migrate_catalog(connection, database_path)
+        insert_recipe_model(connection, collision)
+        connection.execute("INSERT INTO saved_pantry VALUES (1)")
+        connection.execute("INSERT INTO saved_pantry_items VALUES (1, 'eggs')")
+        connection.commit()
+        before = database_rows(connection)
+
+    with pytest.raises(CatalogStoreError, match="reserved recipe id collision"):
+        initialize_catalog(database_path, INGREDIENT_REGISTRY)
+
+    with closing(connect_catalog(database_path)) as connection:
+        assert database_rows(connection) == before
 
 
 def test_feature_003_recipe_catalog_is_pinned_immutable_history() -> None:

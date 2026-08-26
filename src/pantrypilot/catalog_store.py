@@ -5,8 +5,13 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from pantrypilot.catalog import load_catalog
-from pantrypilot.catalog_release import CatalogRelease, catalog_manifest_digest
+from pantrypilot.catalog import FEATURE_003_RECIPE_CATALOG, load_catalog
+from pantrypilot.catalog_release import (
+    CATALOG_RELEASE_DIGESTS,
+    CatalogRelease,
+    catalog_manifest_digest,
+    current_catalog_release,
+)
 from pantrypilot.database import (
     CURRENT_SCHEMA_VERSION,
     DatabaseError,
@@ -111,16 +116,24 @@ def seed_catalog(
 
 def initialize_catalog(
     database_path: Path,
-    seed_records: Iterable[Mapping[str, object]],
     ingredient_registry: IngredientRegistry,
 ) -> None:
     try:
+        release = current_catalog_release(ingredient_registry)
+    except (ValidationError, ValueError, TypeError) as error:
+        raise CatalogStoreError(
+            f"catalog release validation failed for '{database_path}'"
+        ) from error
+
+    try:
         with closing(connect_catalog(database_path)) as connection:
             migrate_catalog(connection, database_path)
-            seed_catalog(
+            reconcile_catalog(
                 connection,
                 database_path,
-                seed_records,
+                release,
+                CATALOG_RELEASE_DIGESTS,
+                FEATURE_003_RECIPE_CATALOG,
                 ingredient_registry,
             )
     except CatalogStoreError:

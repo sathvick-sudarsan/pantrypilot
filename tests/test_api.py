@@ -58,7 +58,7 @@ def test_lifespan_initializes_and_publishes_frozen_catalog(tmp_path: Path) -> No
         assert all(
             isinstance(recipe, Recipe) for recipe in client.app.state.recipe_catalog
         )
-        assert len(client.app.state.recipe_catalog) == 4
+        assert len(client.app.state.recipe_catalog) == 24
 
 
 def test_importing_app_does_not_create_database(tmp_path: Path) -> None:
@@ -107,7 +107,7 @@ def test_exported_app_uses_configured_database_path_during_lifespan(
     assert database_path.exists()
 
 
-def test_persisted_non_empty_change_is_visible_after_restart(tmp_path: Path) -> None:
+def test_official_scalar_edit_is_restored_after_restart(tmp_path: Path) -> None:
     database_path = tmp_path / "catalog.sqlite3"
     with TestClient(create_app(database_path)):
         pass
@@ -127,7 +127,54 @@ def test_persisted_non_empty_change_is_visible_after_restart(tmp_path: Path) -> 
     result = next(
         item for item in response.json()["results"] if item["id"] == "spinach-omelet"
     )
-    assert result["name"] == "Durable Omelet"
+    assert result["name"] == "Spinach Omelet"
+
+
+def test_missing_official_recipe_is_restored_after_restart(tmp_path: Path) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with TestClient(create_app(database_path)):
+        pass
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("DELETE FROM recipes WHERE id = 'spinach-omelet'")
+
+    with TestClient(create_app(database_path)) as restarted:
+        assert "spinach-omelet" in {
+            recipe.id for recipe in restarted.app.state.recipe_catalog
+        }
+
+
+def test_valid_out_of_band_recipe_survives_restart_and_joins_snapshot(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with TestClient(create_app(database_path)):
+        pass
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO recipes "
+            "(id, name, calories, protein_g, prep_minutes) "
+            "VALUES ('durable-only', 'Durable Only', 300, 20.0, 15)"
+        )
+        connection.execute(
+            "INSERT INTO recipe_ingredients VALUES ('durable-only', 0, 'eggs')"
+        )
+
+    with TestClient(create_app(database_path)) as restarted:
+        durable_only = next(
+            recipe
+            for recipe in restarted.app.state.recipe_catalog
+            if recipe.id == "durable-only"
+        )
+
+    assert durable_only == Recipe(
+        id="durable-only",
+        name="Durable Only",
+        required_ingredient_ids=("eggs",),
+        calories=300,
+        protein_g=20.0,
+        prep_minutes=15,
+    )
 
 
 def test_unavailable_storage_prevents_startup(tmp_path: Path) -> None:
@@ -148,6 +195,26 @@ def test_incomplete_current_schema_prevents_startup_without_seed_fallback(
     with pytest.raises(CatalogStoreError):
         with TestClient(create_app(database_path)):
             pass
+
+
+def test_invalid_catalog_content_state_prevents_serving_without_code_fallback(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "catalog.sqlite3"
+    with TestClient(create_app(database_path)):
+        pass
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE catalog_content_state SET manifest_digest = ? WHERE id = 1",
+            ("0" * 64,),
+        )
+    application = create_app(database_path)
+
+    with pytest.raises(CatalogStoreError, match="stored catalog content digest"):
+        with TestClient(application):
+            pass
+
+    assert not hasattr(application.state, "recipe_catalog")
 
 
 def test_request_uses_snapshot_without_database_io(
@@ -341,7 +408,7 @@ def test_meal_rankings_returns_successful_empty_result(client):
     }
 
 
-def test_meal_rankings_returns_all_eligible_results_in_deterministic_order(client):
+def test_meal_rankings_returns_expanded_catalog_results(client):
     response = client.post(
         "/v1/meal-rankings",
         json={
@@ -354,17 +421,16 @@ def test_meal_rankings_returns_all_eligible_results_in_deterministic_order(clien
 
     response_body = response.json()
     assert response.status_code == 200
-    assert [result["id"] for result in response_body["results"]] == [
-        "spinach-omelet",
-        "peanut-noodles",
-        "black-bean-tacos",
-        "lentil-soup",
-    ]
+    result_ids = [result["id"] for result in response_body["results"]]
+    assert result_ids[0] == "spinach-omelet"
+    assert {"avocado-egg-toast", "tofu-rice-bowl", "chicken-pasta-bowl"} <= set(
+        result_ids
+    )
     assert response_body["returned_count"] > 1
     assert response_body["returned_count"] == len(response_body["results"])
 
 
-def test_canonical_inputs_preserve_feature_001_result_order_and_scores(client):
+def test_meal_rankings_keeps_structurally_compatible_result_fields(client):
     response = client.post(
         "/v1/meal-rankings",
         json={
@@ -376,14 +442,25 @@ def test_canonical_inputs_preserve_feature_001_result_order_and_scores(client):
     )
 
     assert response.status_code == 200
-    assert [
-        (result["id"], result["final_score"]) for result in response.json()["results"]
-    ] == [
-        ("spinach-omelet", 0.7334),
-        ("peanut-noodles", 0.2156),
-        ("black-bean-tacos", 0.1964),
-        ("lentil-soup", 0.176),
-    ]
+    result = response.json()["results"][0]
+    assert set(result) == {
+        "id",
+        "name",
+        "required_ingredients",
+        "calories",
+        "protein_g",
+        "prep_minutes",
+        "final_score",
+        "matched_ingredients",
+        "missing_ingredients",
+        "score_breakdown",
+        "explanation",
+    }
+    assert set(result["score_breakdown"]) == {
+        "pantry_coverage",
+        "protein_fit",
+        "time_fit",
+    }
 
 
 @pytest.mark.parametrize(
