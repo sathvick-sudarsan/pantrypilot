@@ -3,12 +3,21 @@ import json
 import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 
+from pantrypilot.catalog import (
+    OFFICIAL_RECIPE_CATALOG,
+    RETIRED_OFFICIAL_RECIPE_IDS,
+)
 from pantrypilot.ingredients import IngredientRegistry
 from pantrypilot.models import Recipe
 
 RECIPE_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 RELEASE_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+CURRENT_CATALOG_CONTENT_VERSION = 1
+CATALOG_RELEASE_DIGESTS = MappingProxyType(
+    {1: "f811853765a0732ae34521e47c2f7e3c691f5cb00bfec4e138f9ce08a01c9f2c"}
+)
 
 
 @dataclass(frozen=True)
@@ -112,4 +121,16 @@ def build_catalog_release(
         manifest_digest=manifest_digest,
         recipes=current_recipes,
         retired_recipe_ids=retired_ids,
+    )
+
+
+def current_catalog_release(
+    ingredient_registry: IngredientRegistry,
+) -> CatalogRelease:
+    return build_catalog_release(
+        OFFICIAL_RECIPE_CATALOG,
+        RETIRED_OFFICIAL_RECIPE_IDS,
+        ingredient_registry,
+        CURRENT_CATALOG_CONTENT_VERSION,
+        CATALOG_RELEASE_DIGESTS,
     )
