@@ -54,7 +54,7 @@ jobs:
         run: uv run pytest
 
       - name: Evaluate ingredient resolution
-        run: uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
+        run: uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v2.json
 
       - name: Check formatting
         run: uv run ruff format --check src tests

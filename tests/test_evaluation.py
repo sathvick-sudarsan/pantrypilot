@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,17 @@ from pantrypilot.evaluation import (
 )
 from pantrypilot.ingredients import INGREDIENT_REGISTRY, resolve_ingredient
 
-FIXTURE_PATH = Path("evaluations/ingredient-resolution-v1.json")
+V1_FIXTURE_PATH = Path("evaluations/ingredient-resolution-v1.json")
+V2_FIXTURE_PATH = Path("evaluations/ingredient-resolution-v2.json")
+V1_SHA256 = "523255671bdbc141aca565ab479daffdfa5db0bc07e09454d0a969e22dbba48d"
+NEW_ALIAS_CONFUSABLE_NEGATIVES = (
+    ("oat", "oats", "oat milk"),
+    ("banana", "bananas", "banana peppers"),
+    ("chickpea", "chickpeas", "chickpea flour"),
+    ("cucumber", "cucumbers", "cucumber water"),
+    ("tomato", "tomatoes", "tomato paste"),
+    ("potato", "potatoes", "sweet potato"),
+)
 
 
 def test_load_evaluation_fixture_validates_version_and_case_shape(tmp_path):
@@ -172,24 +183,15 @@ def test_load_evaluation_fixture_rejects_unknown_expected_id(tmp_path):
         load_evaluation_fixture(path, INGREDIENT_REGISTRY)
 
 
-def test_v1_fixture_covers_all_registered_terms_with_consistent_categories():
-    fixture = load_evaluation_fixture(FIXTURE_PATH, INGREDIENT_REGISTRY)
+def test_v1_fixture_remains_the_historical_evidence():
+    fixture = load_evaluation_fixture(V1_FIXTURE_PATH, INGREDIENT_REGISTRY)
 
-    expected_registered_cases = {
-        (ingredient.canonical_name, ingredient.id, "canonical")
-        for ingredient in INGREDIENT_REGISTRY.by_id.values()
-    } | {
-        (alias, ingredient.id, "alias")
-        for ingredient in INGREDIENT_REGISTRY.by_id.values()
-        for alias in ingredient.aliases
-    }
-    actual_registered_cases = {
-        (case.input, case.expected_ingredient_id, case.category)
-        for case in fixture.cases
-        if case.category != "unresolved"
-    }
-
-    assert actual_registered_cases == expected_registered_cases
+    assert sha256(V1_FIXTURE_PATH.read_bytes()).hexdigest() == V1_SHA256
+    assert fixture.schema_version == 1
+    assert len(fixture.cases) == 28
+    assert sum(case.category == "canonical" for case in fixture.cases) == 14
+    assert sum(case.category == "alias" for case in fixture.cases) == 7
+    assert sum(case.category == "unresolved" for case in fixture.cases) == 7
 
     for case in fixture.cases:
         resolution = resolve_ingredient(case.input, INGREDIENT_REGISTRY)
@@ -213,14 +215,43 @@ def test_v1_fixture_covers_all_registered_terms_with_consistent_categories():
     }
 
 
-def test_v1_fixture_has_the_approved_version_and_category_counts():
-    fixture = load_evaluation_fixture(FIXTURE_PATH, INGREDIENT_REGISTRY)
+def test_v2_fixture_retains_v1_cases_in_order_and_covers_the_registry():
+    v1_payload = json.loads(V1_FIXTURE_PATH.read_text(encoding="utf-8"))
+    v2_payload = json.loads(V2_FIXTURE_PATH.read_text(encoding="utf-8"))
+    fixture = load_evaluation_fixture(V2_FIXTURE_PATH, INGREDIENT_REGISTRY)
 
     assert fixture.schema_version == 1
-    assert len(fixture.cases) == 28
-    assert sum(case.category == "canonical" for case in fixture.cases) == 14
-    assert sum(case.category == "alias" for case in fixture.cases) == 7
-    assert sum(case.category == "unresolved" for case in fixture.cases) == 7
+    assert v2_payload["cases"][: len(v1_payload["cases"])] == v1_payload["cases"]
+    assert len({case.input for case in fixture.cases}) == len(fixture.cases)
+
+    expected_registered_cases = {
+        (ingredient.canonical_name, ingredient.id, "canonical")
+        for ingredient in INGREDIENT_REGISTRY.by_id.values()
+    } | {
+        (alias, ingredient.id, "alias")
+        for ingredient in INGREDIENT_REGISTRY.by_id.values()
+        for alias in ingredient.aliases
+    }
+    actual_registered_cases = [
+        (case.input, case.expected_ingredient_id, case.category)
+        for case in fixture.cases
+        if case.category != "unresolved"
+    ]
+
+    assert set(actual_registered_cases) == expected_registered_cases
+    assert len(actual_registered_cases) == len(expected_registered_cases)
+
+
+def test_v2_fixture_contains_every_reviewed_new_alias_negative_as_unresolved():
+    fixture = load_evaluation_fixture(V2_FIXTURE_PATH, INGREDIENT_REGISTRY)
+    cases = {
+        (case.input, case.expected_ingredient_id, case.category)
+        for case in fixture.cases
+    }
+
+    for alias, ingredient_id, negative in NEW_ALIAS_CONFUSABLE_NEGATIVES:
+        assert (alias, ingredient_id, "alias") in cases
+        assert (negative, None, "unresolved") in cases
 
 
 def test_evaluate_resolver_uses_the_approved_confusion_count_rules():
@@ -331,8 +362,8 @@ def test_exact_name_baseline_uses_normalized_canonical_names_only(value, expecte
     assert resolve_exact_name(value, INGREDIENT_REGISTRY) == expected_id
 
 
-def test_v1_comparison_improves_recall_with_zero_false_positives():
-    fixture = load_evaluation_fixture(FIXTURE_PATH, INGREDIENT_REGISTRY)
+def test_v2_comparison_improves_recall_with_zero_false_positives():
+    fixture = load_evaluation_fixture(V2_FIXTURE_PATH, INGREDIENT_REGISTRY)
 
     comparison = compare_resolvers(fixture, INGREDIENT_REGISTRY)
 
@@ -343,24 +374,15 @@ def test_v1_comparison_improves_recall_with_zero_false_positives():
         baseline.false_positives,
         baseline.false_negatives,
         baseline.true_negatives,
-    ) == (14, 0, 7, 7)
+    ) == (39, 0, 13, 13)
     assert baseline.precision == 1.0
-    assert baseline.recall == 0.6667
-    assert [case.input for case in baseline.false_negative_cases] == [
-        "egg",
-        "black bean",
-        "corn tortilla",
-        "peanut",
-        "lentil",
-        "carrot",
-        "vegetable stock",
-    ]
+    assert baseline.recall == 0.75
     assert (
         resolver.true_positives,
         resolver.false_positives,
         resolver.false_negatives,
         resolver.true_negatives,
-    ) == (21, 0, 0, 7)
+    ) == (52, 0, 0, 13)
     assert resolver.precision == 1.0
     assert resolver.recall == 1.0
     assert resolver.false_positive_cases == ()
@@ -370,17 +392,17 @@ def test_v1_comparison_improves_recall_with_zero_false_positives():
 
 
 def test_evaluation_cli_prints_deterministic_comparison_json(capsys):
-    exit_code = main([str(FIXTURE_PATH)])
+    exit_code = main([str(V2_FIXTURE_PATH)])
 
     first_output = capsys.readouterr().out
     assert exit_code == 0
     parsed = json.loads(first_output)
-    assert parsed["exact_name_baseline"]["recall"] == 0.6667
+    assert parsed["exact_name_baseline"]["recall"] == 0.75
     assert parsed["canonical_alias_resolver"]["recall"] == 1.0
     assert parsed["recall_improved"] is True
     assert parsed["zero_false_positives"] is True
 
-    assert main([str(FIXTURE_PATH)]) == 0
+    assert main([str(V2_FIXTURE_PATH)]) == 0
     assert capsys.readouterr().out == first_output
 
 
@@ -395,7 +417,7 @@ def test_evaluation_module_command_runs_from_the_project_root_without_pythonpath
             "python",
             "-m",
             "pantrypilot.evaluation",
-            "evaluations/ingredient-resolution-v1.json",
+            "evaluations/ingredient-resolution-v2.json",
         ],
         cwd=Path(__file__).resolve().parents[1],
         env=environment,
@@ -407,12 +429,12 @@ def test_evaluation_module_command_runs_from_the_project_root_without_pythonpath
     assert completed.returncode == 0, completed.stderr
     output = json.loads(completed.stdout)
     assert output["exact_name_baseline"] == {
-        "true_positives": 14,
+        "true_positives": 39,
         "false_positives": 0,
-        "false_negatives": 7,
-        "true_negatives": 7,
+        "false_negatives": 13,
+        "true_negatives": 13,
         "precision": 1.0,
-        "recall": 0.6667,
+        "recall": 0.75,
         "false_positive_cases": [],
         "false_negative_cases": [
             {
@@ -457,13 +479,49 @@ def test_evaluation_module_command_runs_from_the_project_root_without_pythonpath
                 "expected_ingredient_id": "vegetable-broth",
                 "predicted_ingredient_id": None,
             },
+            {
+                "input": "oat",
+                "category": "alias",
+                "expected_ingredient_id": "oats",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "banana",
+                "category": "alias",
+                "expected_ingredient_id": "bananas",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "chickpea",
+                "category": "alias",
+                "expected_ingredient_id": "chickpeas",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "cucumber",
+                "category": "alias",
+                "expected_ingredient_id": "cucumbers",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "tomato",
+                "category": "alias",
+                "expected_ingredient_id": "tomatoes",
+                "predicted_ingredient_id": None,
+            },
+            {
+                "input": "potato",
+                "category": "alias",
+                "expected_ingredient_id": "potatoes",
+                "predicted_ingredient_id": None,
+            },
         ],
     }
     assert output["canonical_alias_resolver"] == {
-        "true_positives": 21,
+        "true_positives": 52,
         "false_positives": 0,
         "false_negatives": 0,
-        "true_negatives": 7,
+        "true_negatives": 13,
         "precision": 1.0,
         "recall": 1.0,
         "false_positive_cases": [],

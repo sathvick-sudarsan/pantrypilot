@@ -27,7 +27,7 @@ behavior was added.
 uv sync --locked --python 3.12
 uv run pytest
 uv run uvicorn pantrypilot.app:app --app-dir src
-uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
+uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v2.json
 ```
 
 ## Automated verification
@@ -43,7 +43,7 @@ Run the authoritative verification contract locally before proposing a change:
 ```powershell
 uv lock --check
 uv run pytest
-uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
+uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v2.json
 uv run ruff format --check src tests
 uv run ruff check src tests
 git diff --check
