@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "catalog_version": 1,
+  "catalog_digest": "f811853765a0732ae34521e47c2f7e3c691f5cb00bfec4e138f9ce08a01c9f2c",
+  "catalog_size": 24,
+  "warmups": 100,
+  "measurements": 1000,
+  "workloads": [
+    {
+      "id": "broad-high-coverage",
+      "request": {
+        "pantry_items": [
+          "eggs",
+          "spinach",
+          "olive oil",
+          "rice",
+          "tomatoes",
+          "onion",
+          "garlic",
+          "carrots",
+          "avocado",
+          "lime",
+          "black bean",
+          "chicken"
+        ],
+        "min_protein_g": 25.0,
+        "max_prep_minutes": 60,
+        "excluded_ingredients": [],
+        "limit": 50
+      },
+      "expected_eligible_count": 24,
+      "expected_response_ids": [
+        "spinach-omelet",
+        "black-bean-quinoa-salad",
+        "black-bean-rice-bowl",
+        "avocado-egg-toast",
+        "tuna-avocado-salad",
+        "chicken-tacos",
+        "black-bean-tacos",
+        "coconut-lentil-curry",
+        "tomato-lentil-stew",
+        "chicken-pasta-bowl",
+        "coconut-chicken-stew",
+        "chickpea-rice-bowl",
+        "chickpea-cucumber-salad",
+        "pasta-tomato-soup",
+        "lentil-cucumber-salad",
+        "salmon-quinoa-salad",
+        "beef-rice-bowl",
+        "potato-chickpea-curry",
+        "tofu-rice-bowl",
+        "tofu-vegetable-soup",
+        "lentil-soup",
+        "peanut-noodles",
+        "yogurt-oat-bowl",
+        "overnight-oats"
+      ],
+      "expected_response_digest": "c4caf4c6260ea59b76ce7a115d3473b6544ef18c1dda471900f16a4377582cd5"
+    },
+    {
+      "id": "broad-low-coverage",
+      "request": {
+        "pantry_items": [
+          "lentil",
+          "cardamom pods"
+        ],
+        "min_protein_g": 20.0,
+        "max_prep_minutes": 60,
+        "excluded_ingredients": [],
+        "limit": 50
+      },
+      "expected_eligible_count": 24,
+      "expected_response_ids": [
+        "lentil-soup",
+        "lentil-cucumber-salad",
+        "coconut-lentil-curry",
+        "tomato-lentil-stew",
+        "spinach-omelet",
+        "tuna-avocado-salad",
+        "peanut-noodles",
+        "avocado-egg-toast",
+        "chicken-tacos",
+        "chickpea-rice-bowl",
+        "salmon-quinoa-salad",
+        "black-bean-tacos",
+        "beef-rice-bowl",
+        "black-bean-quinoa-salad",
+        "black-bean-rice-bowl",
+        "tofu-rice-bowl",
+        "tofu-vegetable-soup",
+        "yogurt-oat-bowl",
+        "chicken-pasta-bowl",
+        "overnight-oats",
+        "coconut-chicken-stew",
+        "chickpea-cucumber-salad",
+        "potato-chickpea-curry",
+        "pasta-tomato-soup"
+      ],
+      "expected_response_digest": "5fb98708a6d0ae29e33c070e23553b39f4eb5306f13e85e05311cf84b76b5533"
+    },
+    {
+      "id": "strict-preparation-limit",
+      "request": {
+        "pantry_items": [
+          "egg",
+          "bread",
+          "avocado",
+          "spinach",
+          "olive oil",
+          "oats",
+          "banana",
+          "yogurt",
+          "peanut"
+        ],
+        "min_protein_g": 20.0,
+        "max_prep_minutes": 20,
+        "excluded_ingredients": [],
+        "limit": 50
+      },
+      "expected_eligible_count": 8,
+      "expected_response_ids": [
+        "avocado-egg-toast",
+        "spinach-omelet",
+        "yogurt-oat-bowl",
+        "overnight-oats",
+        "peanut-noodles",
+        "tuna-avocado-salad",
+        "chickpea-cucumber-salad",
+        "lentil-cucumber-salad"
+      ],
+      "expected_response_digest": "8afe1680cc7946f00e2d1c196dd542bc88a4401a0a0c2d5eff0b85b0c0c7c30e"
+    },
+    {
+      "id": "common-hard-exclusion",
+      "request": {
+        "pantry_items": [
+          "rice",
+          "tomato",
+          "onion",
+          "garlic",
+          "carrot",
+          "spinach",
+          "olive oil",
+          "chicken"
+        ],
+        "min_protein_g": 25.0,
+        "max_prep_minutes": 60,
+        "excluded_ingredients": [
+          "garlic"
+        ],
+        "limit": 50
+      },
+      "expected_eligible_count": 16,
+      "expected_response_ids": [
+        "spinach-omelet",
+        "chickpea-rice-bowl",
+        "chickpea-cucumber-salad",
+        "tuna-avocado-salad",
+        "black-bean-rice-bowl",
+        "lentil-cucumber-salad",
+        "chicken-tacos",
+        "salmon-quinoa-salad",
+        "black-bean-quinoa-salad",
+        "avocado-egg-toast",
+        "tofu-vegetable-soup",
+        "lentil-soup",
+        "peanut-noodles",
+        "black-bean-tacos",
+        "yogurt-oat-bowl",
+        "overnight-oats"
+      ],
+      "expected_response_digest": "f2b97f109348315a964a6c394e48571e4ce3f10e841cdf20263398e59565763f"
+    },
+    {
+      "id": "high-protein-target",
+      "request": {
+        "pantry_items": [
+          "chicken",
+          "tuna",
+          "salmon",
+          "eggs",
+          "spinach",
+          "rice",
+          "tomato",
+          "garlic",
+          "olive oil"
+        ],
+        "min_protein_g": 50.0,
+        "max_prep_minutes": 60,
+        "excluded_ingredients": [],
+        "limit": 50
+      },
+      "expected_eligible_count": 24,
+      "expected_response_ids": [
+        "spinach-omelet",
+        "chicken-pasta-bowl",
+        "salmon-quinoa-salad",
+        "avocado-egg-toast",
+        "tuna-avocado-salad",
+        "coconut-lentil-curry",
+        "tomato-lentil-stew",
+        "pasta-tomato-soup",
+        "potato-chickpea-curry",
+        "chickpea-cucumber-salad",
+        "chickpea-rice-bowl",
+        "chicken-tacos",
+        "black-bean-rice-bowl",
+        "beef-rice-bowl",
+        "lentil-cucumber-salad",
+        "coconut-chicken-stew",
+        "tofu-rice-bowl",
+        "black-bean-quinoa-salad",
+        "tofu-vegetable-soup",
+        "yogurt-oat-bowl",
+        "peanut-noodles",
+        "overnight-oats",
+        "black-bean-tacos",
+        "lentil-soup"
+      ],
+      "expected_response_digest": "b825203f321e8e2f5fda7a4567bef168b2630544af12589308f43569f150d662"
+    },
+    {
+      "id": "typical-limited-response",
+      "request": {
+        "pantry_items": [
+          "rice",
+          "chickpea",
+          "tomato",
+          "onion",
+          "garlic",
+          "spinach",
+          "carrot",
+          "olive oil"
+        ],
+        "min_protein_g": 25.0,
+        "max_prep_minutes": 30,
+        "excluded_ingredients": [
+          "chicken"
+        ],
+        "limit": 5
+      },
+      "expected_eligible_count": 11,
+      "expected_response_ids": [
+        "spinach-omelet",
+        "chickpea-cucumber-salad",
+        "chickpea-rice-bowl",
+        "tuna-avocado-salad",
+        "lentil-cucumber-salad"
+      ],
+      "expected_response_digest": "d4f51d15a55ed3fe286364dde510b0c472cf514b584b788b41e83b479dec3647"
+    }
+  ]
+}
