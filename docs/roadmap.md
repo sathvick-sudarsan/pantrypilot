@@ -53,8 +53,10 @@ in-memory and persisted data.
 - Measure candidate recall and latency against a full-catalog baseline.
 - Preserve canonical ingredient and hard-constraint behavior through retrieval.
 
-Evidence: a representative catalog-scale benchmark, retrieval recall and
-latency metrics, and unchanged eligibility for hard exclusions.
+Evidence: an approved representative 24-recipe full-scan baseline showing
+whether retrieval remains deferred at that scale; when retrieval is later
+justified, retrieval recall and latency metrics plus unchanged eligibility for
+hard exclusions.
 
 ## Phase 5: Food-waste and constrained meal-plan optimization
 
