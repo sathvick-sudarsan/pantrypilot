@@ -37,8 +37,11 @@ collisions. A collision fails before writes rather than claiming someone else's
 record.
 
 Feature 003 stores are adopted conservatively: only the exact historical seed
-catalog qualifies as legacy official content. A divergent durable row remains
-out-of-band rather than being guessed into ownership. Official additions,
+catalog qualifies as legacy official content. A divergent durable row at a
+reserved official ID is a fatal ownership collision: startup fails closed, and
+the conflicting row remains unchanged rather than being guessed into official
+ownership or overwritten. Arbitrary non-reserved out-of-band rows remain valid
+and durable. Official additions,
 corrections, removals, restoration, and retirement occur in one transaction;
 failure rolls back the catalog-content transition. Saved-pantry rows are not
 part of that mutation and remain preserved. Their canonical ingredient IDs stay

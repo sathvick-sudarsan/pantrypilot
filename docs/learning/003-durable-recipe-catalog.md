@@ -21,6 +21,12 @@ score-descending/recipe-ID-ascending ordering, and post-sort limiting are also
 unchanged. `INITIAL_RECIPE_CATALOG` is now only empty-store seed input and a
 test parity fixture; it is not a production fallback.
 
+> **Superseded by Feature 006:** This section describes the Feature 003-era
+> seed-only ownership contract. Feature 006 replaced that production model
+> with explicit official-vs-out-of-band ownership and versioned official
+> catalog reconciliation. See [Feature 006](006-representative-catalog-expansion.md)
+> for the current contract.
+
 ## Stable identifiers are contracts
 
 `spinach-omelet` identifies a recipe even if its display name changes.
