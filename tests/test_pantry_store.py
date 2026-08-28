@@ -5,7 +5,6 @@ from types import ModuleType
 
 import pytest
 
-from pantrypilot.catalog import INITIAL_RECIPE_CATALOG
 from pantrypilot.catalog_store import initialize_catalog
 from pantrypilot.ingredients import INGREDIENT_REGISTRY
 
@@ -16,7 +15,7 @@ def pantry_store_module() -> ModuleType:
 
 def initialized_database(tmp_path: Path) -> Path:
     database_path = tmp_path / "pantrypilot.sqlite3"
-    initialize_catalog(database_path, INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
+    initialize_catalog(database_path, INGREDIENT_REGISTRY)
     return database_path
 
 

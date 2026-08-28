@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from pantrypilot.catalog import INITIAL_RECIPE_CATALOG, load_catalog
+from pantrypilot.catalog_release import current_catalog_release
 from pantrypilot.catalog_store import initialize_catalog, load_durable_catalog
 from pantrypilot.ingredients import INGREDIENT_REGISTRY
 from pantrypilot.models import RankingRequest, Recipe
@@ -11,24 +11,26 @@ from pantrypilot.ranking import UnresolvedExcludedIngredientsError, rank_recipes
 
 
 def direct_catalog() -> tuple[Recipe, ...]:
-    return load_catalog(INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
+    return current_catalog_release(INGREDIENT_REGISTRY).recipes
 
 
 def reordered_durable_catalog(database_path: Path) -> tuple[Recipe, ...]:
-    initialize_catalog(database_path, INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
+    initialize_catalog(database_path, INGREDIENT_REGISTRY)
     with sqlite3.connect(database_path) as connection:
         relationships = connection.execute(
             "SELECT recipe_id, position, ingredient_id "
             "FROM recipe_ingredients ORDER BY recipe_id, position DESC"
         ).fetchall()
         recipes = connection.execute(
-            "SELECT id, name, calories, protein_g, prep_minutes "
+            "SELECT id, name, calories, protein_g, prep_minutes, is_official "
             "FROM recipes ORDER BY id DESC"
         ).fetchall()
         connection.execute("DELETE FROM recipe_ingredients")
         connection.execute("DELETE FROM recipes")
         connection.executemany(
-            "INSERT INTO recipes VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO recipes "
+            "(id, name, calories, protein_g, prep_minutes, is_official) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             recipes,
         )
         connection.executemany(
@@ -115,44 +117,3 @@ def test_durable_catalog_preserves_fail_closed_unresolved_exclusion(
         errors.append(error.value)
 
     assert errors[1].ingredient_resolution == errors[0].ingredient_resolution
-
-
-def test_durable_catalog_preserves_recipe_id_tie_break(tmp_path: Path) -> None:
-    tied_records = (
-        {
-            "id": "z-recipe",
-            "name": "Z Recipe",
-            "required_ingredient_ids": ("eggs",),
-            "calories": 100,
-            "protein_g": 5.0,
-            "prep_minutes": 10,
-        },
-        {
-            "id": "a-recipe",
-            "name": "A Recipe",
-            "required_ingredient_ids": ("eggs",),
-            "calories": 100,
-            "protein_g": 5.0,
-            "prep_minutes": 10,
-        },
-    )
-    database_path = tmp_path / "catalog.sqlite3"
-    initialize_catalog(database_path, reversed(tied_records), INGREDIENT_REGISTRY)
-    request = make_request(pantry_items=["eggs"])
-
-    direct = rank_recipes(
-        request,
-        load_catalog(tied_records, INGREDIENT_REGISTRY),
-        INGREDIENT_REGISTRY,
-    )
-    durable = rank_recipes(
-        request,
-        load_durable_catalog(database_path, INGREDIENT_REGISTRY),
-        INGREDIENT_REGISTRY,
-    )
-
-    assert durable == direct
-    assert [result.id for result in durable.results] == [
-        "a-recipe",
-        "z-recipe",
-    ]

@@ -1,0 +1,3 @@
+# Hash-pinned evidence fixtures require platform-stable checkout bytes.
+/evaluations/ingredient-resolution-v1.json text eol=lf
+/benchmarks/full-scan-ranking-v1.json text eol=lf

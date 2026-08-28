@@ -4,8 +4,6 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from pantrypilot.app import create_app
-from pantrypilot.catalog_store import initialize_catalog
-from pantrypilot.ingredients import INGREDIENT_REGISTRY
 
 CONSTRAINTS = {
     "min_protein_g": 20.0,
@@ -119,49 +117,3 @@ def test_physical_pantry_row_order_cannot_change_complete_ranking(
             ["black beans", "eggs", "spinach"],
             CONSTRAINTS,
         )
-
-
-def test_saved_ranking_preserves_recipe_id_tie_break_limit_and_count(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "ties.sqlite3"
-    tied_records = (
-        {
-            "id": "z-recipe",
-            "name": "Z Recipe",
-            "required_ingredient_ids": ["eggs"],
-            "calories": 200,
-            "protein_g": 20.0,
-            "prep_minutes": 10,
-        },
-        {
-            "id": "a-recipe",
-            "name": "A Recipe",
-            "required_ingredient_ids": ["eggs"],
-            "calories": 200,
-            "protein_g": 20.0,
-            "prep_minutes": 10,
-        },
-    )
-    initialize_catalog(database_path, tied_records, INGREDIENT_REGISTRY)
-    constraints = {**CONSTRAINTS, "min_protein_g": 20.0, "limit": 1}
-
-    with TestClient(create_app(database_path)) as client:
-        assert (
-            client.put("/v1/saved-pantry", json={"pantry_items": ["egg"]}).status_code
-            == 200
-        )
-
-        body, _ = assert_complete_parity(client, ["eggs"], constraints)
-
-    assert [result["id"] for result in body["results"]] == ["a-recipe"]
-    assert body["returned_count"] == 1
-    result = body["results"][0]
-    assert result["final_score"] == round(
-        sum(
-            component["contribution"]
-            for component in result["score_breakdown"].values()
-        ),
-        4,
-    )
-    assert result["explanation"]

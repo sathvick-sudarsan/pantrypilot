@@ -1,8 +1,10 @@
 import pytest
 from pydantic import ValidationError
 
+import pantrypilot.catalog as catalog_module
 from pantrypilot.ingredients import (
     INGREDIENT_REGISTRY,
+    RAW_INGREDIENTS,
     CanonicalIngredient,
     IngredientResolution,
     load_ingredient_registry,
@@ -21,6 +23,81 @@ VALID_INGREDIENTS = (
         "canonical_name": "vegetable broth",
         "aliases": ["vegetable stock"],
     },
+)
+
+ORIGINAL_RAW_INGREDIENTS = (
+    {"id": "eggs", "canonical_name": "eggs", "aliases": ["egg"]},
+    {"id": "spinach", "canonical_name": "spinach", "aliases": []},
+    {"id": "olive-oil", "canonical_name": "olive oil", "aliases": []},
+    {
+        "id": "black-beans",
+        "canonical_name": "black beans",
+        "aliases": ["black bean"],
+    },
+    {
+        "id": "corn-tortillas",
+        "canonical_name": "corn tortillas",
+        "aliases": ["corn tortilla"],
+    },
+    {"id": "avocado", "canonical_name": "avocado", "aliases": []},
+    {"id": "lime", "canonical_name": "lime", "aliases": []},
+    {"id": "noodles", "canonical_name": "noodles", "aliases": []},
+    {"id": "peanuts", "canonical_name": "peanuts", "aliases": ["peanut"]},
+    {"id": "soy-sauce", "canonical_name": "soy sauce", "aliases": []},
+    {"id": "lentils", "canonical_name": "lentils", "aliases": ["lentil"]},
+    {"id": "carrots", "canonical_name": "carrots", "aliases": ["carrot"]},
+    {"id": "celery", "canonical_name": "celery", "aliases": []},
+    {
+        "id": "vegetable-broth",
+        "canonical_name": "vegetable broth",
+        "aliases": ["vegetable stock"],
+    },
+)
+
+NEW_CANONICAL_INGREDIENTS = {
+    "oats": ("oats", ("oat",)),
+    "bananas": ("bananas", ("banana",)),
+    "berries": ("berries", ()),
+    "milk": ("milk", ()),
+    "yogurt": ("yogurt", ()),
+    "bread": ("bread", ()),
+    "tofu": ("tofu", ()),
+    "rice": ("rice", ()),
+    "broccoli": ("broccoli", ()),
+    "garlic": ("garlic", ()),
+    "ginger": ("ginger", ()),
+    "onion": ("onion", ()),
+    "ground-beef": ("ground beef", ()),
+    "chickpeas": ("chickpeas", ("chickpea",)),
+    "cucumbers": ("cucumbers", ("cucumber",)),
+    "tomatoes": ("tomatoes", ("tomato",)),
+    "salmon": ("salmon", ()),
+    "quinoa": ("quinoa", ()),
+    "potatoes": ("potatoes", ("potato",)),
+    "coconut-milk": ("coconut milk", ()),
+    "tuna": ("tuna", ()),
+    "chicken": ("chicken", ()),
+    "cabbage": ("cabbage", ()),
+    "pasta": ("pasta", ()),
+    "cheese": ("cheese", ()),
+}
+
+PROPOSED_ALIAS_CASES = (
+    ("oat", "oats"),
+    ("banana", "bananas"),
+    ("chickpea", "chickpeas"),
+    ("cucumber", "cucumbers"),
+    ("tomato", "tomatoes"),
+    ("potato", "potatoes"),
+)
+
+TARGETED_CONFUSABLE_NEGATIVES = (
+    "oat milk",
+    "banana peppers",
+    "chickpea flour",
+    "cucumber water",
+    "tomato paste",
+    "sweet potato",
 )
 
 
@@ -112,10 +189,14 @@ def test_resolve_ingredients_preserves_every_input_in_order():
     ]
 
 
-def test_application_registry_is_the_approved_canonical_identity_set():
+def test_application_registry_preserves_the_original_canonical_identity_set():
+    original_ids = {record["id"] for record in ORIGINAL_RAW_INGREDIENTS}
+
+    assert RAW_INGREDIENTS[: len(ORIGINAL_RAW_INGREDIENTS)] == ORIGINAL_RAW_INGREDIENTS
     assert {
         ingredient.id: (ingredient.canonical_name, ingredient.aliases)
         for ingredient in INGREDIENT_REGISTRY.by_id.values()
+        if ingredient.id in original_ids
     } == {
         "eggs": ("eggs", ("egg",)),
         "spinach": ("spinach", ()),
@@ -132,6 +213,48 @@ def test_application_registry_is_the_approved_canonical_identity_set():
         "celery": ("celery", ()),
         "vegetable-broth": ("vegetable broth", ("vegetable stock",)),
     }
+
+
+def test_application_registry_contains_only_the_needed_new_candidate_ids():
+    new_records = RAW_INGREDIENTS[len(ORIGINAL_RAW_INGREDIENTS) :]
+
+    assert tuple(record["id"] for record in new_records) == tuple(
+        NEW_CANONICAL_INGREDIENTS
+    )
+    assert {
+        ingredient.id: (ingredient.canonical_name, ingredient.aliases)
+        for ingredient in INGREDIENT_REGISTRY.by_id.values()
+        if ingredient.id in NEW_CANONICAL_INGREDIENTS
+    } == NEW_CANONICAL_INGREDIENTS
+
+
+def test_every_new_registry_id_is_used_by_the_candidate_catalog():
+    catalog = getattr(catalog_module, "OFFICIAL_RECIPE_CATALOG", None)
+    if catalog is None:
+        pytest.fail("OFFICIAL_RECIPE_CATALOG is not implemented")
+    used_ids = {
+        ingredient_id
+        for recipe in catalog
+        for ingredient_id in recipe.required_ingredient_ids
+    }
+
+    assert set(NEW_CANONICAL_INGREDIENTS) <= used_ids
+
+
+@pytest.mark.parametrize(("value", "ingredient_id"), PROPOSED_ALIAS_CASES)
+def test_candidate_aliases_resolve_only_the_reviewed_exact_terms(value, ingredient_id):
+    resolution = resolve_ingredient(value, INGREDIENT_REGISTRY)
+
+    assert resolution.ingredient_id == ingredient_id
+    assert resolution.match_type == "alias"
+
+
+@pytest.mark.parametrize("value", TARGETED_CONFUSABLE_NEGATIVES)
+def test_candidate_confusable_inputs_remain_unresolved(value):
+    resolution = resolve_ingredient(value, INGREDIENT_REGISTRY)
+
+    assert resolution.ingredient_id is None
+    assert resolution.match_type == "unresolved"
 
 
 def test_identical_input_and_registry_produce_identical_resolution():

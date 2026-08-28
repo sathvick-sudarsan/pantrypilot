@@ -13,13 +13,19 @@ a recipe chatbot or external-API wrapper.
 
 ## Current status
 
-**Feature 005: Automated CI Verification** is implemented. GitHub successfully
-executed `PantryPilot verification` for the Feature 005 pull request. The
-workflow is configured for pull requests targeting `main` and pushes to `main`;
-the PR-hosted path is verified, while the eventual push-to-main path remains
-unproven until merge. The check is visible but not required, and `main` remains
-unprotected unless repository governance is changed separately. No deployment
-behavior was added.
+**Feature 006: Representative Catalog Expansion and Full-Scan Baseline** is
+implemented. The versioned official catalog has 24 owner-approved recipes;
+official rows reconcile at startup while valid out-of-band rows remain durable
+and protected by ownership markers. The approved full-scan benchmark keeps
+retrieval deferred at this representative scale: its worst workload p95 was
+`0.4841 ms`, below the unchanged `50 ms` threshold. Feature 006 implements no
+retrieval, indexing, embeddings, or candidate generation.
+
+GitHub has successfully executed `PantryPilot verification` for both a pull
+request and a push to `main`. The check remains visible rather than required;
+branch protection is separate repository governance, and `main` remains
+unprotected unless the owner changes that policy. No deployment behavior was
+added.
 
 ## Quick start
 
@@ -27,23 +33,23 @@ behavior was added.
 uv sync --locked --python 3.12
 uv run pytest
 uv run uvicorn pantrypilot.app:app --app-dir src
-uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
+uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v2.json
+uv run python -m pantrypilot.benchmark benchmarks/full-scan-ranking-v1.json
 ```
 
 ## Automated verification
 
 The committed `.github/workflows/ci.yml` configures GitHub to run the visible
 `PantryPilot verification` check for pull requests targeting `main` and pushes
-to `main`. The owner-authorized Feature 005 PR run proves that GitHub recognizes
-and executes the pull-request path; the eventual push-to-main path remains
-unproven until merge.
+to `main`. Successful hosted runs prove execution for both event paths. They do
+not configure branch protection or make this a required merge check.
 
 Run the authoritative verification contract locally before proposing a change:
 
 ```powershell
 uv lock --check
 uv run pytest
-uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v1.json
+uv run python -m pantrypilot.evaluation evaluations/ingredient-resolution-v2.json
 uv run ruff format --check src tests
 uv run ruff check src tests
 git diff --check
@@ -61,11 +67,12 @@ Windows compatibility, or merge enforcement. No CI badge is included.
 ## Durable catalog and saved pantry
 
 PantryPilot stores recipes in a local SQLite file. On startup it migrates a
-fresh store, seeds the approved four recipes only when both catalog tables are
-empty, reloads the complete catalog as validated immutable `Recipe` objects,
-and serves inline ranking requests from that in-memory snapshot. Inline ranking
-has no request-time SQLite I/O; saved ranking performs one durable pantry read.
-Startup never falls back to Python seed data after a storage failure.
+fresh store, reconciles the versioned 24-recipe official catalog, preserves
+valid out-of-band rows through explicit ownership markers, reloads the complete
+catalog as validated immutable `Recipe` objects, and serves inline ranking
+requests from that in-memory snapshot. Inline ranking has no request-time
+SQLite I/O; saved ranking performs one durable pantry read. Startup never falls
+back to Python seed data after a storage failure.
 
 PantryPilot keeps one application-local current pantry in the same SQLite
 database as the durable recipe catalog. Saved pantry state contains only
@@ -193,6 +200,12 @@ not expose an API repair/reset operation, and `PUT` is not an implicit repair.
 - [Feature 004 learning guide](docs/learning/004-durable-saved-pantry.md)
 - [Feature 005 design](docs/superpowers/specs/2026-08-20-automated-ci-verification-design.md)
 - [Feature 005 learning guide](docs/learning/005-automated-ci-verification.md)
+- [Feature 006 design](docs/superpowers/specs/2026-08-22-representative-catalog-expansion-design.md)
+- [Feature 006 plan](docs/superpowers/plans/2026-08-23-representative-catalog-expansion.md)
+- [Feature 006 catalog provenance](docs/data/recipe-catalog-v1.md)
+- [Feature 006 scoped CC0 notice](docs/data/official-recipe-catalog-CC0-1.0.md)
+- [Feature 006 full-scan baseline](docs/benchmarks/006-full-scan-baseline.md)
+- [Feature 006 learning guide](docs/learning/006-representative-catalog-expansion.md)
 - [Contributor instructions](AGENTS.md)
 
 ## Engineering workflow

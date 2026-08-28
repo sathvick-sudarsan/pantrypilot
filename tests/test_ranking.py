@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from pantrypilot.catalog import INITIAL_RECIPE_CATALOG, load_catalog
+from pantrypilot.catalog import FEATURE_003_RECIPE_CATALOG
 from pantrypilot.ingredients import INGREDIENT_REGISTRY
 from pantrypilot.models import RankingRequest, Recipe
 from pantrypilot.ranking import (
@@ -14,7 +14,7 @@ from pantrypilot.ranking import (
     render_explanation,
 )
 
-TEST_CATALOG = load_catalog(INITIAL_RECIPE_CATALOG, INGREDIENT_REGISTRY)
+TEST_CATALOG = FEATURE_003_RECIPE_CATALOG
 
 
 def make_recipe(

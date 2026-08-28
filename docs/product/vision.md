@@ -138,17 +138,21 @@ engineering interview:
 
 ## Current boundary
 
-Features 003 and 004 keep the approved recipe catalog and one application-local
-current pantry in a local durable SQLite store. Application startup migrates
-and initializes the store, validates the complete recipe catalog into immutable
-domain objects, and ranks that in-memory recipe snapshot through the existing
-deterministic Feature 002 ingredient-resolution and ranking pipeline. Saved
-pantry reads resolve the durable canonical IDs to current registry names at
-request time. The ingredient registry remains code-owned.
+Features 003–006 keep a versioned, owner-approved 24-recipe official catalog
+and one application-local current pantry in a local durable SQLite store.
+Application startup migrates and reconciles official rows while preserving valid
+out-of-band rows through explicit ownership markers, validates the complete
+recipe catalog into immutable domain objects, and ranks that in-memory snapshot
+through the existing deterministic ingredient-resolution and ranking pipeline.
+Saved-pantry reads preserve stable canonical ingredient IDs and resolve their
+current registry names at request time. The ingredient registry remains
+code-owned.
 
 The singleton marker/items schema is intentionally provisional. Future
 users/ownership, quantities/units, and grocery or waste optimization require
-separate product evidence and migrations; Feature 004 does not model them.
-Retrieval remains deferred until catalog scale makes full ranking inefficient.
+separate product evidence and migrations; Feature 004 does not model them. The
+approved Feature 006 full-scan baseline keeps retrieval deferred at the
+representative 24-recipe catalog scale; it does not establish performance at
+substantially larger catalog sizes, and Feature 006 implements no retrieval.
 Request and ranking history also remain deferred because their purpose, privacy,
 and retention semantics are not yet defined.

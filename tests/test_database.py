@@ -33,7 +33,9 @@ def create_populated_v1(connection: sqlite3.Connection) -> None:
     for statement in migration_one:
         connection.execute(statement)
     connection.execute(
-        "INSERT INTO recipes VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO recipes "
+        "(id, name, calories, protein_g, prep_minutes) "
+        "VALUES (?, ?, ?, ?, ?)",
         ("v1-recipe", "V1 Recipe", 420, 28.0, 20),
     )
     connection.executemany(
@@ -51,7 +53,10 @@ def recipe_rows(
     connection: sqlite3.Connection,
 ) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
     return (
-        connection.execute("SELECT * FROM recipes ORDER BY id").fetchall(),
+        connection.execute(
+            "SELECT id, name, calories, protein_g, prep_minutes "
+            "FROM recipes ORDER BY id"
+        ).fetchall(),
         connection.execute(
             "SELECT * FROM recipe_ingredients ORDER BY recipe_id, position"
         ).fetchall(),
@@ -67,7 +72,7 @@ def test_connect_database_uses_explicit_transactions_and_foreign_keys(
         assert connection.execute("SELECT 1 AS value").fetchone()["value"] == 1
 
 
-def test_fresh_database_migrates_from_zero_to_exact_version_two_schema(
+def test_fresh_database_migrates_from_zero_to_exact_version_three_schema(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "pantrypilot.sqlite3"
@@ -76,22 +81,24 @@ def test_fresh_database_migrates_from_zero_to_exact_version_two_schema(
 
         migrate_database(connection, database_path)
 
-        assert user_version(connection) == CURRENT_SCHEMA_VERSION == 2
+        assert user_version(connection) == CURRENT_SCHEMA_VERSION == 3
         assert table_names(connection) == {
             "recipes",
             "recipe_ingredients",
             "saved_pantry",
             "saved_pantry_items",
+            "catalog_content_state",
         }
         assert {
-            row[1]: (row[2], row[3], row[5])
+            row[1]: (row[2], row[3], row[4], row[5])
             for row in connection.execute("PRAGMA table_info(recipes)")
         } == {
-            "id": ("TEXT", 1, 1),
-            "name": ("TEXT", 1, 0),
-            "calories": ("NUMERIC", 1, 0),
-            "protein_g": ("NUMERIC", 1, 0),
-            "prep_minutes": ("INTEGER", 1, 0),
+            "id": ("TEXT", 1, None, 1),
+            "name": ("TEXT", 1, None, 0),
+            "calories": ("NUMERIC", 1, None, 0),
+            "protein_g": ("NUMERIC", 1, None, 0),
+            "prep_minutes": ("INTEGER", 1, None, 0),
+            "is_official": ("INTEGER", 1, "0", 0),
         }
         assert {
             row[1]: (row[2], row[3], row[5])
@@ -144,9 +151,71 @@ def test_fresh_database_migrates_from_zero_to_exact_version_two_schema(
             "id",
             "CASCADE",
         )
+        assert {
+            row[1]: (row[2], row[3], row[5])
+            for row in connection.execute("PRAGMA table_info(catalog_content_state)")
+        } == {
+            "id": ("INTEGER", 1, 1),
+            "version": ("INTEGER", 1, 0),
+            "manifest_digest": ("TEXT", 1, 0),
+        }
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT id, version, manifest_digest FROM catalog_content_state"
+            )
+        ] == [(1, 0, "unmanaged")]
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO recipes "
+                "(id, name, calories, protein_g, prep_minutes, is_official) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("owned", "Owned", 100, 10.0, 10, 2),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("UPDATE catalog_content_state SET id = 2 WHERE id = 1")
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE catalog_content_state SET version = -1 WHERE id = 1"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE catalog_content_state SET version = 1.5 WHERE id = 1"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE catalog_content_state "
+                "SET manifest_digest = 'different' WHERE id = 1"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE catalog_content_state "
+                "SET version = 1, manifest_digest = 'unmanaged' WHERE id = 1"
+            )
+        connection.execute(
+            "UPDATE catalog_content_state SET version = 1, manifest_digest = ? "
+            "WHERE id = 1",
+            ("a" * 64,),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE catalog_content_state SET manifest_digest = ? WHERE id = 1",
+                ("A" * 64,),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE catalog_content_state SET manifest_digest = ? WHERE id = 1",
+                ("a" * 63,),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE catalog_content_state SET manifest_digest = ? WHERE id = 1",
+                ("g" * 64,),
+            )
 
 
-def test_populated_version_one_migrates_to_two_without_changing_recipes(
+def test_populated_version_one_migrates_to_three_without_changing_recipes(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "pantrypilot.sqlite3"
@@ -156,9 +225,59 @@ def test_populated_version_one_migrates_to_two_without_changing_recipes(
 
         migrate_database(connection, database_path)
 
-        assert user_version(connection) == 2
+        assert user_version(connection) == 3
         assert recipe_rows(connection) == before
         assert connection.execute("SELECT * FROM saved_pantry").fetchall() == []
+
+
+def create_populated_v2(connection: sqlite3.Connection) -> None:
+    create_populated_v1(connection)
+    migration_two = dict(SCHEMA_MIGRATIONS)[2]
+    connection.execute("BEGIN IMMEDIATE")
+    for statement in migration_two:
+        connection.execute(statement)
+    connection.execute("INSERT INTO saved_pantry VALUES (1)")
+    connection.executemany(
+        "INSERT INTO saved_pantry_items VALUES (?, ?)",
+        [(1, "eggs"), (1, "spinach")],
+    )
+    connection.execute("PRAGMA user_version = 2")
+    connection.commit()
+
+
+def test_populated_version_two_migrates_to_three_preserving_all_rows(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "pantrypilot.sqlite3"
+    with closing(connect_database(database_path)) as connection:
+        create_populated_v2(connection)
+        recipes_before = recipe_rows(connection)
+        pantry_before = (
+            connection.execute("SELECT * FROM saved_pantry").fetchall(),
+            connection.execute("SELECT * FROM saved_pantry_items").fetchall(),
+        )
+
+        migrate_database(connection, database_path)
+
+        assert user_version(connection) == 3
+        assert recipe_rows(connection) == recipes_before
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT id, name, calories, protein_g, prep_minutes, is_official "
+                "FROM recipes"
+            )
+        ] == [("v1-recipe", "V1 Recipe", 420, 28.0, 20, 0)]
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT id, version, manifest_digest FROM catalog_content_state"
+            )
+        ] == [(1, 0, "unmanaged")]
+        assert (
+            connection.execute("SELECT * FROM saved_pantry").fetchall(),
+            connection.execute("SELECT * FROM saved_pantry_items").fetchall(),
+        ) == pantry_before
 
 
 def test_current_version_migration_is_a_no_op(tmp_path: Path) -> None:
@@ -179,14 +298,14 @@ def test_current_version_migration_is_a_no_op(tmp_path: Path) -> None:
             ).fetchall()
             == schema_before
         )
-        assert user_version(connection) == 2
+        assert user_version(connection) == 3
 
 
 def test_newer_schema_version_fails_without_mutation(tmp_path: Path) -> None:
     database_path = tmp_path / "pantrypilot.sqlite3"
     with closing(connect_database(database_path)) as connection:
         connection.execute("CREATE TABLE sentinel (value TEXT)")
-        connection.execute("PRAGMA user_version = 3")
+        connection.execute("PRAGMA user_version = 4")
         before = connection.execute(
             "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name"
         ).fetchall()
@@ -194,7 +313,7 @@ def test_newer_schema_version_fails_without_mutation(tmp_path: Path) -> None:
         with pytest.raises(DatabaseError, match="newer than supported"):
             migrate_database(connection, database_path)
 
-        assert user_version(connection) == 3
+        assert user_version(connection) == 4
         assert (
             connection.execute(
                 "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name"
@@ -249,6 +368,43 @@ def test_migration_two_ddl_conflict_rolls_back_first_table_and_keeps_v1(
             == "sentinel"
         )
         assert recipe_rows(connection) == before_recipes
+
+
+def test_migration_three_ddl_conflict_rolls_back_schema_data_and_keeps_v2(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "pantrypilot.sqlite3"
+    with closing(connect_database(database_path)) as connection:
+        create_populated_v2(connection)
+        recipes_before = recipe_rows(connection)
+        pantry_before = (
+            connection.execute("SELECT * FROM saved_pantry").fetchall(),
+            connection.execute("SELECT * FROM saved_pantry_items").fetchall(),
+        )
+        connection.execute("CREATE TABLE catalog_content_state (sentinel TEXT)")
+
+        with pytest.raises(DatabaseError, match="schema version 3"):
+            migrate_database(connection, database_path)
+
+        assert user_version(connection) == 2
+        assert {row[1] for row in connection.execute("PRAGMA table_info(recipes)")} == {
+            "id",
+            "name",
+            "calories",
+            "protein_g",
+            "prep_minutes",
+        }
+        assert (
+            connection.execute("PRAGMA table_info(catalog_content_state)").fetchall()[
+                0
+            ][1]
+            == "sentinel"
+        )
+        assert recipe_rows(connection) == recipes_before
+        assert (
+            connection.execute("SELECT * FROM saved_pantry").fetchall(),
+            connection.execute("SELECT * FROM saved_pantry_items").fetchall(),
+        ) == pantry_before
 
 
 def test_commit_failure_after_version_update_restores_schema_data_and_v1(
