@@ -19,7 +19,7 @@ from pantrypilot.ingredients import INGREDIENT_REGISTRY, resolve_ingredient
 
 V1_FIXTURE_PATH = Path("evaluations/ingredient-resolution-v1.json")
 V2_FIXTURE_PATH = Path("evaluations/ingredient-resolution-v2.json")
-V1_SHA256 = "523255671bdbc141aca565ab479daffdfa5db0bc07e09454d0a969e22dbba48d"
+V1_SHA256 = "a80fc512e5047ce41d0dd273f8a021f17a868013ff216c9e5cfc8b2ef6d3f6f3"
 NEW_ALIAS_CONFUSABLE_NEGATIVES = (
     ("oat", "oats", "oat milk"),
     ("banana", "bananas", "banana peppers"),

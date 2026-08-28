@@ -26,7 +26,7 @@
 - Reconcile current official rows on every startup, including current-version reruns. Restore modified or missing official rows, but delete retired marked-official rows only while legitimately advancing from an older managed version or adopting an exact legacy row retired by the first release.
 - Never write `saved_pantry` or `saved_pantry_items` during catalog-content evolution. Existing canonical ingredient IDs are stable and additive even if a future recipe no longer uses them.
 - Add only canonical ingredients used by the approved corpus. Resolution remains normalized exact canonical-name or explicit-alias lookup; unsupported or ambiguous terms abstain. Do not add fuzzy, substring, pluralization, embedding, or similarity behavior.
-- Keep `evaluations/ingredient-resolution-v1.json` byte-for-byte unchanged at SHA-256 `523255671bdbc141aca565ab479daffdfa5db0bc07e09454d0a969e22dbba48d`. V2 retains fixture `schema_version: 1`, contains every v1 row unchanged, covers every current canonical term and alias, and preserves zero unsafe false positives.
+- Keep `evaluations/ingredient-resolution-v1.json` byte-for-byte unchanged at repository-byte SHA-256 `a80fc512e5047ce41d0dd273f8a021f17a868013ff216c9e5cfc8b2ef6d3f6f3`. V2 retains fixture `schema_version: 1`, contains every v1 row unchanged, covers every current canonical term and alias, and preserves zero unsafe false positives.
 - Do not change request or response models, route shapes, ranking weights, formula, rounding, explanation template, hard preparation/exclusion semantics, soft protein semantics, sort key, unresolved-exclusion failure, or post-sort limiting.
 - Benchmark exactly the released 24-record catalog. Use 100 warmups and 1,000 measurements per workload with `time.perf_counter_ns`; the timed region contains only `rank_recipes(request, catalog, registry)`.
 - Hosted CI may validate benchmark semantics but must not assert elapsed time. Feature 006 never implements retrieval, synthetic scale, an index, a cache, a recipe CRUD/import path, an external runtime API, scraping, or a new dependency.
@@ -784,7 +784,7 @@ Expected: the committed release contains only owner-approved facts, their pinned
 
 Replace the test that requires v1 to cover the current expanded registry with exact historical evidence:
 
-- v1 SHA-256 is `523255671bdbc141aca565ab479daffdfa5db0bc07e09454d0a969e22dbba48d`;
+- v1 frozen repository-byte SHA-256 is `a80fc512e5047ce41d0dd273f8a021f17a868013ff216c9e5cfc8b2ef6d3f6f3`;
 - v1 retains schema version 1, 28 cases, 14 canonical, 7 alias, and 7 unresolved rows;
 - v2 schema version remains 1;
 - the first 28 v2 cases equal v1 in value and order;
@@ -1198,7 +1198,7 @@ git log --oneline --decorate 8b262507ca5260b0638dc99cbaeeaa2ba1277523..HEAD
 
 Expected:
 
-- v1 hash is exactly `523255671bdbc141aca565ab479daffdfa5db0bc07e09454d0a969e22dbba48d`;
+- v1 frozen repository-byte hash is exactly `a80fc512e5047ce41d0dd273f8a021f17a868013ff216c9e5cfc8b2ef6d3f6f3`;
 - prohibited production/dependency files have empty diffs;
 - CI changes only the evaluator path from v1 to v2;
 - no database, cache, credential, environment, benchmark scratch, or unrelated file exists;
