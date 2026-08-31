@@ -25,6 +25,7 @@ from pantrypilot.pantry_store import (
     replace_saved_pantry,
 )
 from pantrypilot.ranking import UnresolvedExcludedIngredientsError, rank_recipes
+from pantrypilot.request_logging import RequestLoggingMiddleware
 
 DATABASE_PATH_ENV = "PANTRYPILOT_DB_PATH"
 DEFAULT_DATABASE_PATH = Path("pantrypilot.sqlite3")
@@ -56,6 +57,7 @@ def create_app(database_path: Path) -> FastAPI:
         yield
 
     application = FastAPI(title="PantryPilot", lifespan=lifespan)
+    application.add_middleware(RequestLoggingMiddleware)
 
     def saved_pantry_response(
         ingredient_ids: tuple[str, ...],
