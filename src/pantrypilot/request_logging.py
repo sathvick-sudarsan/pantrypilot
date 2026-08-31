@@ -2,6 +2,7 @@ import logging
 import time
 import uuid
 
+from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 REQUEST_LOGGER = logging.getLogger("pantrypilot.request")
@@ -40,10 +41,13 @@ class RequestLoggingMiddleware:
                 message = {**message, "headers": headers}
             await send(message)
 
-        def emit_completion(level: int) -> None:
+        def emit_completion(level: int, *, exc_info: bool = False) -> None:
             assert response_status is not None
             route = getattr(scope.get("route"), "path_format", None)
             http_route = route if isinstance(route, str) else "unmatched"
+            arguments: dict[str, object] = {}
+            if exc_info:
+                arguments["exc_info"] = True
             REQUEST_LOGGER.log(
                 level,
                 "request_completed",
@@ -58,8 +62,20 @@ class RequestLoggingMiddleware:
                         3,
                     ),
                 },
+                **arguments,
             )
 
-        await self.app(scope, receive, send_with_request_id)
-        assert response_status is not None
-        emit_completion(logging.WARNING if response_status >= 500 else logging.INFO)
+        try:
+            await self.app(scope, receive, send_with_request_id)
+        except Exception:
+            if response_status is None:
+                response = PlainTextResponse(
+                    "Internal Server Error",
+                    status_code=500,
+                )
+                await response(scope, receive, send_with_request_id)
+            emit_completion(logging.ERROR, exc_info=True)
+            raise
+        else:
+            assert response_status is not None
+            emit_completion(logging.WARNING if response_status >= 500 else logging.INFO)
