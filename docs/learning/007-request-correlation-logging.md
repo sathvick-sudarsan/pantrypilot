@@ -143,7 +143,7 @@ stable fields. Do not add a production handler merely to make INFO visible.
 
 1. Capture a successful request record and compare its `request_id` with the
    response `X-Request-ID`. Success: they match exactly and there is one event.
-2. Send `PUT /v1/saved-pantry` to observe 405, then request an unknown URL.
+2. Send `DELETE /v1/saved-pantry` to observe 405, then request an unknown URL.
    Explain why the first can use a normalized route while the second is
    `unmatched` rather than the raw path.
 3. Replace the monotonic clock with a fake sequence and verify the exact
