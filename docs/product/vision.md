@@ -156,3 +156,8 @@ representative 24-recipe catalog scale; it does not establish performance at
 substantially larger catalog sizes, and Feature 006 implements no retrieval.
 Request and ranking history also remain deferred because their purpose, privacy,
 and retention semantics are not yet defined.
+
+Feature 007 adds ephemeral, server-owned request IDs and one privacy-safe
+application completion record per HTTP request. PantryPilot persists neither
+request IDs nor events and adds no metrics, distributed traces, aggregation,
+dashboards, alerts, or hosted observability infrastructure.
