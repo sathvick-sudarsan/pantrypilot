@@ -13,8 +13,11 @@ a recipe chatbot or external-API wrapper.
 
 ## Current status
 
-**Feature 006: Representative Catalog Expansion and Full-Scan Baseline** is
-implemented. The versioned official catalog has 24 owner-approved recipes;
+**Feature 007: Request Correlation and Privacy-Safe Structured Logging** is
+implemented. Every HTTP response has a server-generated `X-Request-ID` and
+one privacy-safe application completion record. **Feature 006: Representative
+Catalog Expansion and Full-Scan Baseline** remains implemented. The versioned
+official catalog has 24 owner-approved recipes;
 official rows reconcile at startup while valid out-of-band rows remain durable
 and protected by ownership markers. The approved full-scan benchmark keeps
 retrieval deferred at this representative scale: its worst workload p95 was
@@ -26,6 +29,21 @@ request and a push to `main`. The check remains visible rather than required;
 branch protection is separate repository governance, and `main` remains
 unprotected unless the owner changes that policy. No deployment behavior was
 added.
+
+## Request correlation and logging
+
+Every PantryPilot HTTP response carries a server-generated `X-Request-ID`.
+PantryPilot ignores inbound values and emits one `pantrypilot.request`
+`request_completed` LogRecord with request ID, method, normalized route (or
+`unmatched`), status, and monotonic duration. Expected outcomes are INFO,
+handled 5xx responses are WARNING, and unexpected failures are ERROR with
+internal traceback evidence while clients receive the exact sanitized 500.
+
+PantryPilot installs no logging handler or formatter and does not configure the
+root logger. Deployment owns rendering, sinks, retention, and shipping. The
+event excludes request/response bodies, pantry data, raw paths, query values,
+headers, client IPs, and storage details; it is request correlation, not
+request history, metrics, distributed tracing, or hosted observability.
 
 ## Quick start
 
@@ -206,6 +224,9 @@ not expose an API repair/reset operation, and `PUT` is not an implicit repair.
 - [Feature 006 scoped CC0 notice](docs/data/official-recipe-catalog-CC0-1.0.md)
 - [Feature 006 full-scan baseline](docs/benchmarks/006-full-scan-baseline.md)
 - [Feature 006 learning guide](docs/learning/006-representative-catalog-expansion.md)
+- [Feature 007 design](docs/superpowers/specs/2026-08-29-request-correlation-logging-design.md)
+- [Feature 007 plan](docs/superpowers/plans/2026-08-30-request-correlation-logging.md)
+- [Feature 007 learning guide](docs/learning/007-request-correlation-logging.md)
 - [Contributor instructions](AGENTS.md)
 
 ## Engineering workflow

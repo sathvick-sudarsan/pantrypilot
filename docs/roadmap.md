@@ -46,6 +46,12 @@ than the exact-name baseline.
 Evidence: migration tests, contract tests, and equivalent ranking results across
 in-memory and persisted data.
 
+Status: recipe and saved-pantry persistence, schema migrations, stable durable
+identities, storage/domain separation, production-oriented API errors, and
+privacy-safe request tracing are implemented. Ranking-request persistence and
+history remain deferred until their purpose, privacy, and retention semantics
+are approved.
+
 ## Phase 4: Retrieval at meaningful catalog scale
 
 - Grow the recipe catalog only when representative product needs justify it.
